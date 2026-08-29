@@ -40,7 +40,10 @@ async function run() {
       await page.waitForSelector('text=Model Details', { timeout: 15000 });
 
       // adjust this selector once we confirm the real DOM structure
-      const table = page.locator('text=Model Details').locator('xpath=ancestor::*[self::div or self::section][1]');
+      const table = page.locator('div, section')
+  .filter({ hasText: 'Model Details' })
+  .filter({ has: page.locator('table') })
+  .last();
       await table.screenshot({ path: path.join(OUT_DIR, `${city}-${timestamp}.png`) });
 
       console.log(`✓ ${city} captured`);
