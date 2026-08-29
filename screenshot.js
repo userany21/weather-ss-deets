@@ -22,7 +22,9 @@ async function run() {
   const browser = await chromium.launch({
     args: ['--disable-gpu', '--disable-dev-shm-usage'] // memory-friendly flags
   });
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    viewport: { width: 1600, height: 1400 }
+  });
   const page = await context.newPage();
 
   // --- log in once ---
@@ -39,7 +41,6 @@ async function run() {
       await page.goto(`https://wethr.net/market/${city}`, { waitUntil: 'networkidle' });
       await page.waitForSelector('text=Model Details', { timeout: 15000 });
 
-      // grab the sort function call directly from the header and invoke it twice
       const header = page.locator('th[onclick*="sortModelTable"]').filter({ hasText: '7D HI' }).first();
       const onclickCode = await header.getAttribute('onclick');
       await page.evaluate((code) => { eval(code); }, onclickCode);
@@ -52,7 +53,10 @@ async function run() {
         .filter({ has: page.locator('table') })
         .last();
 
+      await table.scrollIntoViewIfNeeded();
       const box = await table.boundingBox();
+      if (!box) throw new Error('table bounding box not found');
+
       await page.screenshot({ path: path.join(OUT_DIR, `${city}-${timestamp}.png`), clip: box });
 
       console.log(`✓ ${city} captured`);
