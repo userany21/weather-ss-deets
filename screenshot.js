@@ -39,6 +39,10 @@ async function run() {
       await page.goto(`https://wethr.net/market/${city}`, { waitUntil: 'networkidle' });
       await page.waitForSelector('text=Model Details', { timeout: 15000 });
 
+      // click the "7D HI" column header to sort ascending by rank
+await page.locator('text=7D HI').first().click();
+await page.waitForTimeout(500); // let the table re-render/re-sort
+
       // adjust this selector once we confirm the real DOM structure
       const table = page.locator('div, section')
   .filter({ hasText: 'Model Details' })
