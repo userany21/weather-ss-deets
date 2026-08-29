@@ -39,18 +39,21 @@ async function run() {
       await page.goto(`https://wethr.net/market/${city}`, { waitUntil: 'networkidle' });
       await page.waitForSelector('text=Model Details', { timeout: 15000 });
 
-      // click the "7D HI" column header to sort ascending by rank
-      await page.locator('text=7D HI').first().click();
+      // click the "7D HI" column header twice to sort ascending by rank
+      await page.locator('text=7D HI').first().click({ force: true, timeout: 10000 });
       await page.waitForTimeout(300);
-      await page.locator('text=7D HI').first().click();
+      await page.locator('text=7D HI').first().click({ force: true, timeout: 10000 });
       await page.waitForTimeout(500);
 
-      // adjust this selector once we confirm the real DOM structure
       const table = page.locator('div, section')
-  .filter({ hasText: 'Model Details' })
-  .filter({ has: page.locator('table') })
-  .last();
-      await table.screenshot({ path: path.join(OUT_DIR, `${city}-${timestamp}.png`) });
+        .filter({ hasText: 'Model Details' })
+        .filter({ has: page.locator('table') })
+        .last();
+
+      // use a clipped page screenshot instead of table.screenshot() to
+      // avoid Playwright's stability-wait hanging on the live-updating table
+      const box = await table.boundingBox();
+      await page.screenshot({ path: path.join(OUT_DIR, `${city}-${timestamp}.png`), clip: box });
 
       console.log(`✓ ${city} captured`);
     } catch (err) {
