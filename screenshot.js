@@ -6,14 +6,33 @@ const path = require('path');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 
-const CITIES = [
-  { slug: 'sanfrancisco', label: 'san francisco' },
-  { slug: 'laguardia',    label: 'nyc' },
-  { slug: 'seattle',      label: 'seattle' },
-  { slug: 'atlanta',      label: 'atlanta' },
-  { slug: 'losangeles',   label: 'los angeles' },
-  { slug: 'miami',        label: 'miami' }
-];
+const CITIES = {
+  america: [
+    { slug: 'sanfrancisco', label: 'san francisco', coast: 'west' },
+    { slug: 'seattle',      label: 'seattle',        coast: 'west' },
+    { slug: 'losangeles',   label: 'los angeles',    coast: 'west' },
+    { slug: 'laguardia',    label: 'nyc',            coast: 'east' },
+    { slug: 'atlanta',      label: 'atlanta',        coast: 'east' },
+    { slug: 'miami',        label: 'miami',          coast: 'east' }
+  ],
+  asia: [
+    { slug: 'hongkongobs', label: 'hong kong' },
+    { slug: 'beijing',     label: 'beijing' },
+    { slug: 'shanghai',    label: 'shanghai' },
+    { slug: 'shenzhen',    label: 'shenzhen' },
+    { slug: 'tokyo',       label: 'tokyo' },
+    { slug: 'seoul',       label: 'seoul' },
+    { slug: 'singapore',   label: 'singapore' }
+  ],
+  europe: [
+    { slug: 'amsterdam', label: 'amsterdam' },
+    { slug: 'london',    label: 'london' },
+    { slug: 'madrid',    label: 'madrid' },
+    { slug: 'milan',     label: 'milan' },
+    { slug: 'munich',    label: 'munich' },
+    { slug: 'parislb',   label: 'paris' }
+  ]
+};
 
 const OUT_DIR = path.join(__dirname, 'screenshots');
 if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR);
@@ -78,7 +97,7 @@ async function captureAndSendCity(page, slug, label, timestamp) {
   return true;
 }
 
-async function run() {
+async function run(cityList) {
   const browser = await chromium.launch({
     args: ['--disable-gpu', '--disable-dev-shm-usage']
   });
@@ -95,7 +114,7 @@ async function run() {
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
-  for (const city of CITIES) {
+  for (const city of cityList) {
     const { slug, label } = city;
     let success = false;
 
@@ -120,4 +139,11 @@ async function run() {
   await browser.close();
 }
 
-run().catch(console.error);
+const region = process.argv[2];
+
+if (!region || !CITIES[region]) {
+  console.error(`Usage: node screenshot.js <america|asia|europe>`);
+  process.exit(1);
+}
+
+run(CITIES[region]).catch(console.error);
