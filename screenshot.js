@@ -3,20 +3,35 @@ require('dotenv').config();
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
+const fetch = require('node-fetch');
+const FormData = require('form-data');
 
 const CITIES = [
-  'sanfrancisco',
-  'newyork',
-  'chicago',
-  'losangeles',
-  'miami',
-  'seattle'
-  // confirm these slugs match wethr.net's actual URLs — you may need to
-  // grab them from the Market Directory page
+  { slug: 'sanfrancisco', label: 'san francisco' },
+  { slug: 'laguardia',    label: 'nyc' },
+  { slug: 'seattle',      label: 'seattle' },
+  { slug: 'atlanta',      label: 'atlanta' },
+  { slug: 'losangeles',   label: 'los angeles' },
+  { slug: 'miami',        label: 'miami' }
 ];
 
 const OUT_DIR = path.join(__dirname, 'screenshots');
 if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR);
+
+async function sendToDiscord(label, filePath) {
+  const form = new FormData();
+  form.append('content', label);
+  form.append('file', fs.createReadStream(filePath), path.basename(filePath));
+
+  const res = await fetch(process.env.DISCORD_WEBHOOK_URL, {
+    method: 'POST',
+    body: form
+  });
+
+  if (!res.ok) {
+    throw new Error(`Discord webhook failed: ${res.status} ${await res.text()}`);
+  }
+}
 
 async function run() {
   const browser = await chromium.launch({
@@ -37,8 +52,9 @@ async function run() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
   for (const city of CITIES) {
+    const { slug, label } = city;
     try {
-      await page.goto(`https://wethr.net/market/${city}`, { waitUntil: 'networkidle' });
+      await page.goto(`https://wethr.net/market/${slug}`, { waitUntil: 'networkidle' });
       await page.waitForSelector('text=Model Details', { timeout: 15000 });
 
       const header = page.locator('th[onclick*="sortModelTable"]').filter({ hasText: '7D HI' }).first();
@@ -49,22 +65,26 @@ async function run() {
       await page.waitForTimeout(500);
 
       const table = page.locator('div, section')
-  .filter({ hasText: 'Model Details' })
-  .filter({ has: page.locator('table') })
-  .last();
+        .filter({ hasText: 'Model Details' })
+        .filter({ has: page.locator('table') })
+        .last();
 
-// scroll via JS instead of Playwright's scrollIntoViewIfNeeded (which waits for stability)
-await table.evaluate((el) => el.scrollIntoView({ block: 'center' }));
-await page.waitForTimeout(300);
+      // scroll via JS instead of Playwright's scrollIntoViewIfNeeded (which waits for stability)
+      await table.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+      await page.waitForTimeout(300);
 
-const box = await table.boundingBox();
-if (!box) throw new Error('table bounding box not found');
+      const box = await table.boundingBox();
+      if (!box) throw new Error('table bounding box not found');
 
-await page.screenshot({ path: path.join(OUT_DIR, `${city}-${timestamp}.png`), clip: box });
+      const filePath = path.join(OUT_DIR, `${slug}-${timestamp}.png`);
+      await page.screenshot({ path: filePath, clip: box });
 
-      console.log(`✓ ${city} captured`);
+      // send to discord using the label, NOT the slug
+      await sendToDiscord(label, filePath);
+
+      console.log(`✓ ${slug} captured and sent as "${label}"`);
     } catch (err) {
-      console.error(`✗ ${city} failed:`, err.message);
+      console.error(`✗ ${slug} failed:`, err.message);
     }
   }
 
