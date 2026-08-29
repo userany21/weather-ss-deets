@@ -49,15 +49,18 @@ async function run() {
       await page.waitForTimeout(500);
 
       const table = page.locator('div, section')
-        .filter({ hasText: 'Model Details' })
-        .filter({ has: page.locator('table') })
-        .last();
+  .filter({ hasText: 'Model Details' })
+  .filter({ has: page.locator('table') })
+  .last();
 
-      await table.scrollIntoViewIfNeeded();
-      const box = await table.boundingBox();
-      if (!box) throw new Error('table bounding box not found');
+// scroll via JS instead of Playwright's scrollIntoViewIfNeeded (which waits for stability)
+await table.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+await page.waitForTimeout(300);
 
-      await page.screenshot({ path: path.join(OUT_DIR, `${city}-${timestamp}.png`), clip: box });
+const box = await table.boundingBox();
+if (!box) throw new Error('table bounding box not found');
+
+await page.screenshot({ path: path.join(OUT_DIR, `${city}-${timestamp}.png`), clip: box });
 
       console.log(`✓ ${city} captured`);
     } catch (err) {
