@@ -55,10 +55,10 @@ function computeNextTarget(nowLocal, cadenceMinutes, tickOffsetMinutes) {
 }
 
 function isSameLocalDay(isoA, nowLocal) {
-  if (!isoA) return false;
-  const a = DateTime.fromISO(isoA);
-  return a.hasSame(nowLocal, 'day');
-}
+    if (!isoA) return false;
+    const a = DateTime.fromISO(isoA, { setZone: true });
+    return a.hasSame(nowLocal, 'day');
+  }
 
 async function getPagePacingTime(page) {
   const text = await page.locator('text=/PACING FROM/i').first().textContent();
