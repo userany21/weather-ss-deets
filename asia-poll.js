@@ -24,6 +24,22 @@ const STATE_PATH = path.join(__dirname, 'state-asia.json');
 const OUT_DIR = path.join(__dirname, 'screenshots');
 if (!fs.existsSync(OUT_DIR)) fs.mkdirSync(OUT_DIR);
 
+const LOCK_PATH = path.join(__dirname, '.asia-poll.lock');
+
+if (fs.existsSync(LOCK_PATH)) {
+  const lockAge = Date.now() - fs.statSync(LOCK_PATH).mtimeMs;
+  const STALE_LOCK_MS = 10 * 60 * 1000;
+
+  if (lockAge < STALE_LOCK_MS) {
+    console.log('Previous run still in progress (lock held), skipping this poll.');
+    process.exit(0);
+  } else {
+    console.log('Stale lock found (>10min old), previous run likely crashed — clearing it and proceeding.');
+  }
+}
+
+fs.writeFileSync(LOCK_PATH, String(process.pid));
+
 function loadState() {
   if (!fs.existsSync(STATE_PATH)) return {};
   return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8'));
@@ -195,4 +211,8 @@ async function run() {
   await browser.close();
 }
 
-run().catch(console.error);
+run()
+  .catch((err) => console.error('Fatal error:', err))
+  .finally(() => {
+    if (fs.existsSync(LOCK_PATH)) fs.unlinkSync(LOCK_PATH);
+  });
