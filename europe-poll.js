@@ -162,11 +162,16 @@ async function run() {
       await page.goto(`https://wethr.net/market/${city.slug}`, { waitUntil: 'networkidle' });
       const pacing = await getPagePacingTime(page);
 
-      if (!pacing || pacing.hour !== target.hour || pacing.minute !== target.minute) {
-        console.log(`⏳ ${city.slug}: pacing not yet at ${target.toFormat('h:mm a')}, will recheck next poll`);
+      const pacingDateTime = pacing
+        ? target.set({ hour: pacing.hour, minute: pacing.minute, second: 0, millisecond: 0 })
+        : null;
+
+      if (!pacingDateTime || pacingDateTime < target) {
+        console.log(`⏳ ${city.slug}: pacing not yet at ${target.toFormat('h:mm a')} (site shows ${pacing ? pacingDateTime.toFormat('h:mm a') : 'unreadable'}), will recheck next poll`);
         continue;
       }
 
+      console.log(`→ ${city.slug}: pacing reached/passed ${target.toFormat('h:mm a')} (site shows ${pacingDateTime.toFormat('h:mm a')}), capturing now`);
       await captureAndSend(page, city.slug, city.label);
 
       const nextTarget = target.plus({ minutes: city.cadenceMinutes });
