@@ -4,7 +4,6 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch');
-const FormData = require('form-data');
 const { DateTime } = require('luxon');
 
 const ASIA_CITIES = [
@@ -16,6 +15,8 @@ const ASIA_CITIES = [
   { slug: 'seoul',       label: 'seoul',     tz: 'Asia/Seoul',     cadenceMinutes: 30, tickOffsetMinutes: 0 },
   { slug: 'singapore',   label: 'singapore', tz: 'Asia/Singapore', cadenceMinutes: 30, tickOffsetMinutes: 0 }
 ];
+
+const UNIT = 'C';
 
 const START_HOUR = 8;
 const END_HOUR = 18;
@@ -93,20 +94,20 @@ async function getPagePacingTime(page) {
   return { hour: hh, minute: mm };
 }
 
-async function sendToDiscord(label, filePath) {
-  const form = new FormData();
-  form.append('content', label);
-  form.append('file', fs.createReadStream(filePath), path.basename(filePath));
-
+async function sendToDiscord(payload) {
   const url = `${process.env.DISCORD_WEBHOOK_URL}?wait=true`;
-  const res = await fetch(url, { method: 'POST', body: form });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: JSON.stringify(payload) })
+  });
 
   if (!res.ok) throw new Error(`Discord webhook failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
   if (!data || !data.id) throw new Error('Discord response missing message id — send not confirmed');
 }
 
-async function captureAndSend(page, slug, label) {
+async function scrapeAndSend(page, slug, label, unit) {
   await page.goto(`https://wethr.net/market/${slug}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('text=Model Details', { timeout: 15000 });
 
@@ -117,23 +118,33 @@ async function captureAndSend(page, slug, label) {
   await page.evaluate((code) => { eval(code); }, onclickCode);
   await page.waitForTimeout(500);
 
+  const pacingRaw = await page.locator('text=/PACING FROM/i').first().textContent();
+  const pacingMatch = pacingRaw.match(/(\d{1,2}:\d{2}\s*(?:AM|PM))/i);
+  const pacingTimeText = pacingMatch ? pacingMatch[1].toUpperCase() : null;
+
   const table = page.locator('div, section')
     .filter({ hasText: 'Model Details' })
     .filter({ has: page.locator('table') })
-    .last();
+    .last()
+    .locator('table');
 
-  await table.evaluate((el) => el.scrollIntoView({ block: 'center' }));
-  await page.waitForTimeout(300);
+  const rows = await table.locator('tbody tr').all();
+  const models = [];
+  for (const row of rows) {
+    const cells = await row.locator('td').allTextContents();
+    if (cells.length < 10) continue;
 
-  const box = await table.boundingBox();
-  if (!box) throw new Error('table bounding box not found');
+    const modelName = cells[0].trim().replace(/\s*\(.*?\)\s*$/, '').trim();
+    const rank = parseInt(cells[1].trim().replace('#', ''), 10);
+    if (Number.isNaN(rank)) continue;
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filePath = path.join(OUT_DIR, `${slug}-${timestamp}.png`);
-  await page.screenshot({ path: filePath, clip: box });
+    const high = parseFloat(cells[2].trim().replace('°', ''));
+    const pace = cells[9].trim();
 
-  await sendToDiscord(label, filePath);
-  fs.unlinkSync(filePath);
+    models.push({ model: modelName, rank, high, pace });
+  }
+
+  await sendToDiscord({ city: label, unit, pacing_time: pacingTimeText, models });
 }
 
 async function run() {
@@ -194,7 +205,7 @@ async function run() {
       }
 
       console.log(`→ ${city.slug}: pacing reached/passed ${target.toFormat('h:mm a')} (site shows ${pacingDateTime.toFormat('h:mm a')}), capturing now`);
-      await captureAndSend(page, city.slug, city.label);
+      await scrapeAndSend(page, city.slug, city.label, UNIT);
 
       // advance to the next fixed-cadence target (from the target, not actual confirm time)
       const nextTarget = target.plus({ minutes: city.cadenceMinutes });
