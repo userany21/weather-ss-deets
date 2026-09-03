@@ -133,8 +133,24 @@ function findDayBoundary(ticks) {
   return 0;
 }
 
+// Returns the UTC offset, in minutes, for a given instant + IANA timezone.
+// e.g. Asia/Seoul -> 540 (UTC+9), America/Los_Angeles -> -420 (UTC-7, PDT)
+function getUtcOffsetMinutes(date, tz) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    timeZoneName: 'shortOffset',
+  }).formatToParts(date);
+  const offsetPart = parts.find(p => p.type === 'timeZoneName')?.value; // "GMT+9", "GMT-7", "GMT+5:30"
+  const m = offsetPart && offsetPart.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+  if (!m) throw new Error(`Could not parse UTC offset from "${offsetPart}" for tz "${tz}"`);
+  const sign = m[1] === '-' ? -1 : 1;
+  const hours = parseInt(m[2], 10);
+  const minutes = m[3] ? parseInt(m[3], 10) : 0;
+  return sign * (hours * 60 + minutes);
+}
+
 // Given an ISO date ("2026-09-02"), a local time ("11:00 AM"), and an IANA
-// timezone, produce a real UTC ISO timestamp — no moment/luxon dependency.
+// timezone, produce a real UTC ISO timestamp.
 function toCapturedAt(isoDateStr, timeStr, tz) {
   const [year, month, day] = isoDateStr.split('-').map(Number);
   const m = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
@@ -145,20 +161,18 @@ function toCapturedAt(isoDateStr, timeStr, tz) {
   if (ap === 'PM' && hour !== 12) hour += 12;
   if (ap === 'AM' && hour === 12) hour = 0;
 
-  const naiveUTC = new Date(Date.UTC(year, month - 1, day, hour, minute));
-  if (isNaN(naiveUTC.getTime())) {
+  // Treat the wall-clock values as a UTC instant first, just to have
+  // something to look up the zone's offset against, then correct for it.
+  const guess = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  if (isNaN(guess.getTime())) {
     throw new Error(`Could not build a valid date from isoDateStr="${isoDateStr}" timeStr="${timeStr}"`);
   }
-  const tzString = naiveUTC.toLocaleString('en-US', {
-    timeZone: tz, hour12: false,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
-  const tzDate = new Date(tzString.replace(
-    /(\d+)\/(\d+)\/(\d+),? (\d+):(\d+):(\d+)/, '$3-$1-$2T$4:$5:$6Z'
-  ));
-  const offsetMs = tzDate.getTime() - naiveUTC.getTime();
-  return new Date(naiveUTC.getTime() - offsetMs).toISOString();
+  const offsetMinutes = getUtcOffsetMinutes(guess, tz);
+  const actualUTC = new Date(guess.getTime() - offsetMinutes * 60000);
+  if (isNaN(actualUTC.getTime())) {
+    throw new Error(`Could not build a valid date from isoDateStr="${isoDateStr}" timeStr="${timeStr}"`);
+  }
+  return actualUTC.toISOString();
 }
 
 function parseHistory(historyStr) {
