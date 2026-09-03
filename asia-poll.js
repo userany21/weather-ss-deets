@@ -107,7 +107,7 @@ async function sendToDiscord(payload) {
   if (!data || !data.id) throw new Error('Discord response missing message id — send not confirmed');
 }
 
-async function scrapeAndSend(page, slug, label, unit) {
+async function scrapeAndSend(page, slug, label, unit, timezone, region) {
   await page.goto(`https://wethr.net/market/${slug}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('text=Model Details', { timeout: 15000 });
 
@@ -144,7 +144,7 @@ async function scrapeAndSend(page, slug, label, unit) {
     models.push({ model: modelName, rank, high, pace });
   }
 
-  await sendToDiscord({ city: label, unit, pacing_time: pacingTimeText, models });
+  await sendToDiscord({ city: label, unit, region, timezone, pacing_time: pacingTimeText, models });
 }
 
 async function run() {
@@ -205,7 +205,7 @@ async function run() {
       }
 
       console.log(`→ ${city.slug}: pacing reached/passed ${target.toFormat('h:mm a')} (site shows ${pacingDateTime.toFormat('h:mm a')}), capturing now`);
-      await scrapeAndSend(page, city.slug, city.label, UNIT);
+      await scrapeAndSend(page, city.slug, city.label, UNIT, city.tz, 'asia');
 
       // advance to the next fixed-cadence target (from the target, not actual confirm time)
       const nextTarget = target.plus({ minutes: city.cadenceMinutes });
