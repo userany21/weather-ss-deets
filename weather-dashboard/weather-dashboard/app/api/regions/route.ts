@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { REGIONS } from "@/lib/cities-config";
+import { REGIONS, Region } from "@/lib/cities-config";
 import { getHighTempCollection } from "@/lib/mongodb";
 
 export async function GET() {
@@ -26,7 +26,7 @@ export async function GET() {
   // Also surface any regions that appear in Mongo but aren't in the static list.
   for (const { _id, cityCount } of mongoCounts) {
     if (_id && !REGIONS.includes(_id as never)) {
-      regions.push({ region: _id, cityCount });
+      regions.push({ region: _id as Region, cityCount });
     }
   }
 
