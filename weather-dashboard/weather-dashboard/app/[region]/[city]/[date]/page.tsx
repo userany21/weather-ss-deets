@@ -3,7 +3,7 @@
 import Link from "next/link";
 import useSWR from "swr";
 import TempChart from "@/components/TempChart";
-import PriceChart from "@/components/PriceChart";
+import PriceChart, { type BracketHistory } from "@/components/PriceChart";
 import type { EnrichedTick } from "@/lib/weather-transform";
 import { useWeatherStream } from "@/lib/useWeatherStream";
 
@@ -17,6 +17,10 @@ interface DayResponse {
   winningHigh: number | null;
   winningBracket: string | null;
   ticks: EnrichedTick[];
+}
+
+interface PriceHistoryResponse {
+  brackets: BracketHistory[];
 }
 
 export default function DayPage({
@@ -35,6 +39,16 @@ export default function DayPage({
     // rare case a stream event gets dropped.
     refreshInterval: isToday ? 5 * 60_000 : 0,
   });
+
+  // Polymarket price histories — loaded after tick data arrives so we have
+  // city + date confirmed. Refreshes every 5 min for today; static for past.
+  const { data: priceHistoryData } = useSWR<PriceHistoryResponse>(
+    data
+      ? `/api/prices-history/${encodeURIComponent(cityDecoded)}/${params.date}`
+      : null,
+    fetcher,
+    { refreshInterval: isToday ? 5 * 60_000 : 0, revalidateOnFocus: false }
+  );
 
   // Refetch the instant a new tick for this exact city/date lands, instead
   // of waiting for the next poll.
@@ -81,7 +95,10 @@ export default function DayPage({
           </section>
           <section>
             <h2 className="text-sm text-subtext mb-2">Market price over the day</h2>
-            <PriceChart ticks={data.ticks} />
+            <PriceChart
+                ticks={data.ticks}
+                bracketHistories={priceHistoryData?.brackets ?? []}
+              />
           </section>
         </div>
       )}
