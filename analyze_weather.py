@@ -29,7 +29,9 @@ from datetime import datetime
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # no display needed on the droplet — just save files
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
@@ -150,19 +152,42 @@ def command_day(collection, city, local_date):
     df = pd.DataFrame(docs)
     df['captured_at'] = pd.to_datetime(df['captured_at'])
 
+    # X-axis: the site's own "pacing from" clock (a string like '10:15 AM'),
+    # anchored to the market's local_date. Ticks past midnight roll into the
+    # next day so the curve reads left-to-right instead of wrapping around.
+    paced = pd.to_datetime(
+        df['pacing_time'].astype('string').str.strip().str.upper(),
+        format='%I:%M %p', errors='coerce',
+    )
+    bad = paced.isna() & df['pacing_time'].notna()
+    if bad.any():
+        print(f"Warning: dropping {bad.sum()} tick(s) with unparseable pacing_time: "
+              f"{sorted(df.loc[bad, 'pacing_time'].unique().tolist())}")
+    mins = paced.dt.hour * 60 + paced.dt.minute
+    day_offset = (mins.diff() < -12 * 60).cumsum()  # midnight rollover
+    df['paced_at'] = (pd.to_datetime(df['local_date'])
+                      + pd.to_timedelta(day_offset, unit='D')
+                      + pd.to_timedelta(mins, unit='m'))
+    df = df.dropna(subset=['paced_at']).sort_values('paced_at')
+
+    time_axis_fmt = FuncFormatter(
+        lambda v, pos: mdates.num2date(v).strftime('%I:%M %p').lstrip('0'))
+
     winning_low = df['winning_bracket_low'].dropna().iloc[-1] if df['winning_bracket_low'].notna().any() else None
     winning_high = df['winning_bracket_high'].dropna().iloc[-1] if df['winning_bracket_high'].notna().any() else None
     winning_bracket = df['winning_bracket'].dropna().iloc[-1] if df['winning_bracket'].notna().any() else None
 
     # temp curve
     fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(df['captured_at'], df['weighted_avg'], marker='o', markersize=3, color='#d9534f')
+    ax.plot(df['paced_at'], df['weighted_avg'], marker='o', markersize=3, color='#d9534f')
     if winning_low is not None:
         ax.axhspan(winning_low, winning_high, color='#5cb85c', alpha=0.2,
                     label=f'Winning bracket: {winning_bracket}')
         ax.legend()
     ax.set_ylabel(f"Weighted avg temp ({df['unit'].iloc[0]})")
-    ax.set_xlabel('Time')
+    ax.set_xlabel('Local time (pacing)')
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+    ax.xaxis.set_major_formatter(time_axis_fmt)
     ax.set_title(f'{city.title()} — {local_date} — forecast temp over the day')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
@@ -178,17 +203,19 @@ def command_day(collection, city, local_date):
     df['point_bracket'] = df['weighted_avg'].map(label_bracket)
 
     fig, ax = plt.subplots(figsize=(11, 5))
-    ax.plot(df['captured_at'], df['yes_price'] * 100, marker='o', markersize=3, color='#4a90d9')
+    ax.plot(df['paced_at'], df['yes_price'] * 100, marker='o', markersize=3, color='#4a90d9')
     for _, row in df.dropna(subset=['yes_price', 'point_bracket']).iterrows():
-        ax.annotate(row['point_bracket'], (row['captured_at'], row['yes_price'] * 100),
+        ax.annotate(row['point_bracket'], (row['paced_at'], row['yes_price'] * 100),
                     textcoords='offset points', xytext=(0, 8), ha='center',
                     fontsize=7, rotation=90, alpha=0.75)
     brackets = df['point_bracket'].fillna('<none>')
     switched = brackets.ne(brackets.shift())
-    for t in df.loc[switched, 'captured_at'].iloc[1:]:
+    for t in df.loc[switched, 'paced_at'].iloc[1:]:
         ax.axvline(t, color='gray', ls='--', lw=0.8, alpha=0.5)
     ax.set_ylabel('Yes price (cents)')
-    ax.set_xlabel('Time')
+    ax.set_xlabel('Local time (pacing)')
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+    ax.xaxis.set_major_formatter(time_axis_fmt)
     ax.set_ylim(0, 100)
     ax.set_title(f'{city.title()} — {local_date} — market price over the day')
     plt.xticks(rotation=45, ha='right')
