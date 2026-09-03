@@ -71,15 +71,16 @@ const CITY_TIMEZONES = {
 // Only these cities' scan windows straddle the UTC-date rollover.
 const WEST_COAST_CITIES = new Set(['los angeles', 'seattle', 'san francisco']);
 
-// Matches one history entry: temp, unit, time, price in cents, optional arrow.
-const ENTRY_REGEX = /([\d.]+)([CF])\s*\(([^,]+),\s*(\d+)¢(↑|↓)?\)/g;
+// Matches one history entry: temp, unit, time, and an OPTIONAL price+arrow
+// (some ticks were logged with no price at all, e.g. "81.2F (12:37pm)").
+const ENTRY_REGEX = /([\d.]+)([CF])\s*\(([^,)]+)(?:,\s*(\d+)¢(↑|↓)?)?\)/g;
 
 function normalizeTime(raw) {
-  // "11:00am" -> "11:00 AM"
-  const m = raw.trim().match(/^(\d{1,2}):(\d{2})\s*([ap]m)$/i);
+  // "11:00am" -> "11:00 AM"; "6pm" -> "6:00 PM" (some entries omit minutes)
+  const m = raw.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*([ap]m)$/i);
   if (!m) return raw.trim();
   const [, h, min, ap] = m;
-  return `${h}:${min} ${ap.toUpperCase()}`;
+  return `${h}:${min || '00'} ${ap.toUpperCase()}`;
 }
 
 function to24Hour(timeStr) {
@@ -93,9 +94,23 @@ function to24Hour(timeStr) {
 }
 
 function toIsoDate(dateStr) {
-  // "8/26/2026" -> "2026-08-26"
-  const [month, day, year] = dateStr.split('/').map(Number);
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const trimmed = (dateStr || '').trim();
+
+  // already ISO: "2026-08-26"
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  // US format: "8/26/2026"
+  const usMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (usMatch) {
+    const [, month, day, year] = usMatch;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  throw new Error(`Unrecognized date format: "${dateStr}"`);
 }
 
 function shiftDate(isoDate, days) {
@@ -131,6 +146,9 @@ function toCapturedAt(isoDateStr, timeStr, tz) {
   if (ap === 'AM' && hour === 12) hour = 0;
 
   const naiveUTC = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  if (isNaN(naiveUTC.getTime())) {
+    throw new Error(`Could not build a valid date from isoDateStr="${isoDateStr}" timeStr="${timeStr}"`);
+  }
   const tzString = naiveUTC.toLocaleString('en-US', {
     timeZone: tz, hour12: false,
     year: 'numeric', month: '2-digit', day: '2-digit',
@@ -154,8 +172,8 @@ function parseHistory(historyStr) {
       weighted_avg: parseFloat(temp),
       unit,
       pacing_time: normalizeTime(rawTime),
-      yes_price_cents: parseInt(priceCents, 10),
-      yes_price: parseInt(priceCents, 10) / 100,
+      yes_price_cents: priceCents ? parseInt(priceCents, 10) : null,
+      yes_price: priceCents ? parseInt(priceCents, 10) / 100 : null,
     });
   }
   return entries;
@@ -202,6 +220,14 @@ async function main() {
 
     ticks.forEach((tick, i) => {
       const tickDate = i < boundaryIdx ? shiftDate(isoDate, -1) : isoDate;
+      let capturedAt;
+      try {
+        capturedAt = toCapturedAt(tickDate, tick.pacing_time, tz);
+      } catch (err) {
+        throw new Error(
+          `Failed on row city="${row.city}" date="${row.date}" tick.pacing_time="${tick.pacing_time}": ${err.message}`
+        );
+      }
       docs.push({
         city,
         local_date: tickDate,
@@ -211,7 +237,7 @@ async function main() {
         bracket: null, // not recoverable from the old blob format
         yes_price: tick.yes_price,
         yes_price_cents: tick.yes_price_cents,
-        captured_at: toCapturedAt(tickDate, tick.pacing_time, tz),
+        captured_at: capturedAt,
         backfilled: true, // lets you tell reconstructed docs apart from live ones
       });
     });
