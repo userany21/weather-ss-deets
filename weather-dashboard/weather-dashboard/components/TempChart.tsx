@@ -55,6 +55,10 @@ export default function TempChart({
           <YAxis
             stroke="#8b92a0"
             fontSize={12}
+            domain={([dataMin, dataMax]: [number, number]) => [
+              Math.floor(dataMin - 5),
+              Math.ceil(dataMax + 5),
+            ]}
             label={{ value: `Weighted avg temp (${unit})`, angle: -90, position: "insideLeft", fill: "#8b92a0" }}
           />
           <Tooltip
