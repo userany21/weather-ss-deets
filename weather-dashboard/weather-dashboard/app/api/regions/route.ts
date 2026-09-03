@@ -1,34 +1,27 @@
 import { NextResponse } from "next/server";
-import { REGIONS, Region } from "@/lib/cities-config";
+import { REGIONS, CITIES } from "@/lib/cities-config";
 import { getHighTempCollection } from "@/lib/mongodb";
 
 export async function GET() {
   const collection = await getHighTempCollection();
 
-  // Count distinct cities per region directly from Mongo so newly-polled
-  // cities are reflected here without any config changes.
-  const pipeline = [
-    { $group: { _id: { city: "$city", region: "$region" } } },
-    { $group: { _id: "$_id.region", cityCount: { $sum: 1 } } },
-  ];
-  const mongoCounts: { _id: string; cityCount: number }[] = await collection
-    .aggregate(pipeline)
-    .toArray() as { _id: string; cityCount: number }[];
+  // Get distinct city names that actually have data in Mongo.
+  const citiesWithData: string[] = await collection.distinct("city");
+  const citySet = new Set(citiesWithData.map((c) => c.toLowerCase()));
 
-  const mongoMap = new Map(mongoCounts.map((r) => [r._id, r.cityCount]));
-
-  // Include all known regions; fall back to 0 if Mongo has no docs for one yet.
-  const regions = REGIONS.map((region) => ({
-    region,
-    cityCount: mongoMap.get(region) ?? 0,
-  }));
-
-  // Also surface any regions that appear in Mongo but aren't in the static list.
-  for (const { _id, cityCount } of mongoCounts) {
-    if (_id && !REGIONS.includes(_id as never)) {
-      regions.push({ region: _id as Region, cityCount });
+  // Count how many cities per region have data, using the static config to
+  // map city → region (documents don't carry a region field).
+  const counts = new Map<string, number>();
+  for (const cfg of CITIES) {
+    if (citySet.has(cfg.city)) {
+      counts.set(cfg.region, (counts.get(cfg.region) ?? 0) + 1);
     }
   }
+
+  const regions = REGIONS.map((region) => ({
+    region,
+    cityCount: counts.get(region) ?? 0,
+  }));
 
   return NextResponse.json({ regions });
 }
