@@ -21,6 +21,7 @@ Reads MONGO_URI from a .env file, same as the other scripts in this repo.
 Charts are saved as PNG files in the current directory.
 """
 
+import math
 import os
 import sys
 from datetime import datetime
@@ -102,6 +103,36 @@ def command_summary(collection):
     print('\nSaved success_rate_by_city.png')
 
 
+def make_bracket_labeler(winning_low, winning_high, unit):
+    """
+    Buckets a weighted_avg temp into the market's bracket grid, anchored on
+    the day's winning bracket — it reveals both the bucket width and the
+    parity ('76-77' -> 2-wide pairs starting at 76; '30' -> single degrees,
+    which is how Celsius markets are structured).
+
+    Falls back to F=2-wide even-odd pairs / C=single degrees (anchored at 0)
+    for unresolved days or 'X or below/above' winning tails (infinite bounds).
+
+    Approximation: real events end in tail buckets ('90 or higher'), so labels
+    far from the winning zone may name a discrete bucket that didn't exist.
+    """
+    if (winning_low is not None and math.isfinite(winning_low)
+            and math.isfinite(winning_high)):
+        width = int(winning_high - winning_low) + 1
+        anchor = int(winning_low)
+    else:
+        width = 2 if unit == 'F' else 1
+        anchor = 0
+
+    def label(temp):
+        if temp is None or (isinstance(temp, float) and math.isnan(temp)):
+            return None
+        low = anchor + width * math.floor((temp - anchor) / width)
+        return f'{low}-{low + width - 1}' if width > 1 else f'{low}'
+
+    return label
+
+
 def command_day(collection, city, local_date):
     """
     Pulls every tick for one city-day and plots two curves:
@@ -139,9 +170,23 @@ def command_day(collection, city, local_date):
     plt.savefig(temp_filename, dpi=150)
     print(f'Saved {temp_filename}')
 
-    # price curve
+    # price curve — each point labeled with the bracket its weighted_avg fell
+    # into. The tracker re-aims at a new bracket as the forecast drifts, so a
+    # "price move" is often just a bracket switch; dashed lines mark switches.
+    unit = df['unit'].mode()[0]  # modal unit for the day (dodges C/F mistags)
+    label_bracket = make_bracket_labeler(winning_low, winning_high, unit)
+    df['point_bracket'] = df['weighted_avg'].map(label_bracket)
+
     fig, ax = plt.subplots(figsize=(11, 5))
     ax.plot(df['captured_at'], df['yes_price'] * 100, marker='o', markersize=3, color='#4a90d9')
+    for _, row in df.dropna(subset=['yes_price', 'point_bracket']).iterrows():
+        ax.annotate(row['point_bracket'], (row['captured_at'], row['yes_price'] * 100),
+                    textcoords='offset points', xytext=(0, 8), ha='center',
+                    fontsize=7, rotation=90, alpha=0.75)
+    brackets = df['point_bracket'].fillna('<none>')
+    switched = brackets.ne(brackets.shift())
+    for t in df.loc[switched, 'captured_at'].iloc[1:]:
+        ax.axvline(t, color='gray', ls='--', lw=0.8, alpha=0.5)
     ax.set_ylabel('Yes price (cents)')
     ax.set_xlabel('Time')
     ax.set_ylim(0, 100)
