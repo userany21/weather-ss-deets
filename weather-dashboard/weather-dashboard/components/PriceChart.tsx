@@ -29,8 +29,15 @@ export interface BracketHistory {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function formatClock(ms: number) {
-  return new Date(ms).toLocaleTimeString("en-US", {
+/**
+ * Format a millisecond timestamp as a clock string.
+ * `tzOffsetMs` shifts real UTC → local time before formatting.
+ *   e.g. PDT offset = -25200000 → "11:46 PM UTC" becomes "4:46 PM"
+ * Defaults to 0 (UTC) for the fallback chart whose paced_at values already
+ * store local time expressed as UTC.
+ */
+function formatClock(ms: number, tzOffsetMs = 0) {
+  return new Date(ms + tzOffsetMs).toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -224,6 +231,13 @@ function FullChart({
     [ticks, bracketHistories, tzOffsetMs]
   );
 
+  // Local-time clock formatter — shifts real UTC timestamps by the city's
+  // UTC offset so labels display in the city's local time (not UTC).
+  const formatClockLocal = useMemo(
+    () => (ms: number) => formatClock(ms, tzOffsetMs),
+    [tzOffsetMs]
+  );
+
   // Unified time axis: collect every unique t_ms across all bracket histories
   const allTms = useMemo(() => {
     const set = new Set<number>();
@@ -279,7 +293,7 @@ function FullChart({
             dataKey="t_ms"
             type="number"
             domain={["dataMin", "dataMax"]}
-            tickFormatter={formatClock}
+            tickFormatter={formatClockLocal}
             stroke="#8b92a0"
             fontSize={12}
           />
@@ -290,7 +304,7 @@ function FullChart({
             label={{ value: "Yes price (cents)", angle: -90, position: "insideLeft", fill: "#8b92a0" }}
           />
           <Tooltip
-            labelFormatter={(v: number) => formatClock(v)}
+            labelFormatter={(v: number) => formatClockLocal(v)}
             contentStyle={{ background: "#14171c", border: "1px solid #22262d" }}
             formatter={(v: number, name: string) => [`${v.toFixed(1)}¢`, name]}
           />

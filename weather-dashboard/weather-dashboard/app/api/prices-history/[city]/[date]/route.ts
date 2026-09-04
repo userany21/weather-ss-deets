@@ -200,10 +200,13 @@ export async function GET(
         const res = await fetch(url, { next: { revalidate } });
         if (!res.ok) return { ...bm, history: [] as BracketHistoryEntry[] };
         const data = await res.json();
-        return {
-          ...bm,
-          history: (data.history ?? []) as BracketHistoryEntry[],
-        };
+        // Filter to the 8am–6pm local window. The CLOB API's interval=1d
+        // ignores startTs/endTs and always returns the full UTC day, so we
+        // trim here after the fact.
+        const history = ((data.history ?? []) as BracketHistoryEntry[]).filter(
+          (h) => h.t >= startTs && h.t <= endTs
+        );
+        return { ...bm, history };
       } catch {
         return { ...bm, history: [] as BracketHistoryEntry[] };
       }
