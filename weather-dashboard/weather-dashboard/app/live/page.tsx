@@ -47,7 +47,7 @@ function LiveCityPanel({ city, localDate, localTime }: LiveCity) {
             winningHigh={data.winningHigh}
             winningBracket={data.winningBracket}
           />
-          <PriceChart ticks={data.ticks as EnrichedTick[]} />
+          <PriceChart ticks={data.ticks as EnrichedTick[]} bracketHistories={[]} />
         </div>
       )}
       {data?.ticks?.length === 0 && (
