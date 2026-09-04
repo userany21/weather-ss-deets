@@ -21,6 +21,8 @@ interface DayResponse {
 
 interface PriceHistoryResponse {
   brackets: BracketHistory[];
+  /** UTC offset in ms for the city's timezone on this date */
+  tzOffsetMs: number;
 }
 
 export default function DayPage({
@@ -98,6 +100,7 @@ export default function DayPage({
             <PriceChart
                 ticks={data.ticks}
                 bracketHistories={priceHistoryData?.brackets ?? []}
+                tzOffsetMs={priceHistoryData?.tzOffsetMs ?? 0}
               />
           </section>
         </div>

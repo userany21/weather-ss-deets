@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getCityConfig } from "@/lib/cities-config";
 
 // ---------------------------------------------------------------------------
 // Helpers — mirrors the slug-building logic in backfill-winning-outcomes.js
@@ -41,6 +42,48 @@ const BRACKET_COLORS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Timezone helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the UTC offset in milliseconds for a given IANA timezone on a
+ * given ISO date (e.g. "2026-09-03"). Positive = east of UTC (e.g. Asia/Tokyo
+ * = +9h = +32400000). Negative = west of UTC (e.g. America/Los_Angeles in PDT
+ * = -7h = -25200000).
+ *
+ * Uses noon UTC on the date as the reference point — safe for any timezone
+ * because noon UTC is never within DST transition hours.
+ */
+function getTzOffsetMs(isoDate: string, timezone: string): number {
+  const noonUtc = new Date(`${isoDate}T12:00:00Z`);
+
+  // Format noon UTC in the target timezone to find the local hour
+  const localHour = parseInt(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour: "numeric",
+      hour12: false,
+    }).format(noonUtc),
+    10
+  );
+
+  // offset = local - UTC  →  localHour - 12 (hours), converted to ms
+  // e.g. Tokyo: local 21 - UTC 12 = +9h; LA PDT: local 5 - UTC 12 = -7h
+  return (localHour - 12) * 60 * 60 * 1000;
+}
+
+/**
+ * Converts a local-time hour on an ISO date into a real UTC unix timestamp
+ * (seconds), given the timezone's offset on that date.
+ */
+function localHourToUtcSeconds(isoDate: string, hour: number, tzOffsetMs: number): number {
+  // "isoDate T hour:00:00 Z" is treated as UTC; subtract the offset to get
+  // the real UTC instant that corresponds to `hour` o'clock local time.
+  const fakeUtcMs = new Date(`${isoDate}T${String(hour).padStart(2, "0")}:00:00Z`).getTime();
+  return Math.floor((fakeUtcMs - tzOffsetMs) / 1000);
+}
+
+// ---------------------------------------------------------------------------
 // Route handler
 // ---------------------------------------------------------------------------
 
@@ -49,7 +92,7 @@ const BRACKET_COLORS = [
 export const revalidate = 300;
 
 export interface BracketHistoryEntry {
-  t: number; // unix seconds
+  t: number; // unix seconds (real UTC)
   p: number; // 0–1 float
 }
 
@@ -67,6 +110,17 @@ export async function GET(
   const city = decodeURIComponent(params.city).toLowerCase();
   const date = params.date;
 
+  // ------------------------------------------------------------------
+  // 0. Resolve timezone for this city
+  // ------------------------------------------------------------------
+  const cityConfig = getCityConfig(city);
+  const timezone = cityConfig?.timezone ?? "UTC";
+  const tzOffsetMs = getTzOffsetMs(date, timezone);
+
+  // Real UTC window covering 8am–6pm local time on this date
+  const startTs = localHourToUtcSeconds(date, 8, tzOffsetMs);
+  const endTs   = localHourToUtcSeconds(date, 18, tzOffsetMs);
+
   const slug = buildEventSlug(city, date);
 
   // ------------------------------------------------------------------
@@ -80,17 +134,17 @@ export async function GET(
     );
     if (!res.ok) {
       console.warn(`[prices-history] gamma API ${res.status} for slug "${slug}"`);
-      return NextResponse.json({ brackets: [] });
+      return NextResponse.json({ brackets: [], tzOffsetMs });
     }
     const json = await res.json();
     event = Array.isArray(json) ? json[0] : json;
   } catch (err) {
     console.error("[prices-history] gamma fetch failed:", err);
-    return NextResponse.json({ brackets: [] });
+    return NextResponse.json({ brackets: [], tzOffsetMs });
   }
 
   if (!event?.markets || !Array.isArray(event.markets) || event.markets.length === 0) {
-    return NextResponse.json({ brackets: [] });
+    return NextResponse.json({ brackets: [], tzOffsetMs });
   }
 
   // ------------------------------------------------------------------
@@ -119,7 +173,7 @@ export async function GET(
   }
 
   if (bracketMetas.length === 0) {
-    return NextResponse.json({ brackets: [] });
+    return NextResponse.json({ brackets: [], tzOffsetMs });
   }
 
   // Sort ascending by lower bound (tail "or below" sorts first, "or higher" last)
@@ -131,11 +185,18 @@ export async function GET(
 
   // ------------------------------------------------------------------
   // 3. Fetch price histories from CLOB API in parallel
+  //    Scoped to 8am–6pm local via startTs/endTs
   // ------------------------------------------------------------------
   const histories = await Promise.all(
     bracketMetas.map(async (bm) => {
       try {
-        const url = `https://clob.polymarket.com/prices-history?market=${bm.yesTokenId}&interval=1d&fidelity=1`;
+        const url =
+          `https://clob.polymarket.com/prices-history` +
+          `?market=${bm.yesTokenId}` +
+          `&interval=1d` +
+          `&fidelity=1` +
+          `&startTs=${startTs}` +
+          `&endTs=${endTs}`;
         const res = await fetch(url, { next: { revalidate } });
         if (!res.ok) return { ...bm, history: [] as BracketHistoryEntry[] };
         const data = await res.json();
@@ -150,7 +211,7 @@ export async function GET(
   );
 
   // ------------------------------------------------------------------
-  // 4. Assign colors and return
+  // 4. Assign colors and return (include tzOffsetMs for snap alignment)
   // ------------------------------------------------------------------
   const brackets: BracketResult[] = histories.map((h, i) => ({
     label: h.label,
@@ -159,5 +220,5 @@ export async function GET(
     history: h.history,
   }));
 
-  return NextResponse.json({ brackets });
+  return NextResponse.json({ brackets, tzOffsetMs });
 }

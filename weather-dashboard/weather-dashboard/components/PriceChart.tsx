@@ -42,13 +42,22 @@ function formatClock(ms: number) {
  * For each EnrichedTick with a paced_at + point_bracket, find the closest
  * timestamp in that bracket's price history and record it.
  *
+ * `tzOffsetMs` is the UTC offset for the city's timezone on this date
+ * (e.g. PDT = -25200000). It is used to convert `paced_at` (which stores
+ * local time treated as UTC) into a real UTC millisecond timestamp before
+ * comparing against Polymarket's price history (which uses real UTC).
+ *
+ *   paced_at stores "8:15 AM" as Date.UTC(date, 8, 15) — fake UTC
+ *   real UTC for 8:15 AM PDT = paced_at - tzOffsetMs  (add 7h for PDT)
+ *
  * Returns a Map keyed by  `"<bracketLabel>__<t_ms>"`  whose value is the
  * bracket label string (used by the custom dot renderer to decide whether
  * to show a labeled dot at that position).
  */
 function buildSnapMap(
   ticks: EnrichedTick[],
-  bracketHistories: BracketHistory[]
+  bracketHistories: BracketHistory[],
+  tzOffsetMs: number
 ): Map<string, string> {
   const histMap = new Map<string, { t: number; p: number }[]>();
   for (const b of bracketHistories) histMap.set(b.label, b.history);
@@ -60,10 +69,13 @@ function buildSnapMap(
     const history = histMap.get(tick.point_bracket);
     if (!history?.length) continue;
 
+    // Convert fake-UTC paced_at → real UTC ms
+    const realPacedAt = tick.paced_at - tzOffsetMs;
+
     let best = history[0];
-    let bestDiff = Math.abs(best.t * 1000 - tick.paced_at);
+    let bestDiff = Math.abs(best.t * 1000 - realPacedAt);
     for (const h of history) {
-      const diff = Math.abs(h.t * 1000 - tick.paced_at);
+      const diff = Math.abs(h.t * 1000 - realPacedAt);
       if (diff < bestDiff) {
         best = h;
         bestDiff = diff;
@@ -178,16 +190,20 @@ function FallbackChart({ ticks }: { ticks: EnrichedTick[] }) {
 export default function PriceChart({
   ticks,
   bracketHistories,
+  tzOffsetMs = 0,
 }: {
   ticks: EnrichedTick[];
   bracketHistories: BracketHistory[];
+  /** UTC offset in ms for the city's timezone (e.g. PDT = -25200000). Used
+   *  to align paced_at (local-time-as-UTC) with real-UTC price history. */
+  tzOffsetMs?: number;
 }) {
   // Show the simple fallback until price histories are available
   if (bracketHistories.length === 0) {
     return <FallbackChart ticks={ticks} />;
   }
 
-  return <FullChart ticks={ticks} bracketHistories={bracketHistories} />;
+  return <FullChart ticks={ticks} bracketHistories={bracketHistories} tzOffsetMs={tzOffsetMs} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,13 +213,15 @@ export default function PriceChart({
 function FullChart({
   ticks,
   bracketHistories,
+  tzOffsetMs,
 }: {
   ticks: EnrichedTick[];
   bracketHistories: BracketHistory[];
+  tzOffsetMs: number;
 }) {
   const snapMap = useMemo(
-    () => buildSnapMap(ticks, bracketHistories),
-    [ticks, bracketHistories]
+    () => buildSnapMap(ticks, bracketHistories, tzOffsetMs),
+    [ticks, bracketHistories, tzOffsetMs]
   );
 
   // Unified time axis: collect every unique t_ms across all bracket histories
