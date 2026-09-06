@@ -34,3 +34,8 @@ export async function getHighTempCollection() {
   const db = await getDb();
   return db.collection("high-temp");
 }
+
+export async function getReciprocalCollection() {
+  const db = await getDb();
+  return db.collection("reciprocal");
+}

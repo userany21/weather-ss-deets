@@ -151,7 +151,7 @@ function FallbackChart({ ticks }: { ticks: EnrichedTick[] }) {
   }
 
   return (
-    <div className="h-72 w-full">
+    <div className="h-[32rem] w-full">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
@@ -285,7 +285,7 @@ function FullChart({
   );
 
   return (
-    <div className="h-72 w-full">
+    <div className="h-[32rem] w-full">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
@@ -319,7 +319,7 @@ function FullChart({
               stroke={b.color}
               strokeWidth={1.5}
               dot={snapDots[b.label]}
-              activeDot={{ r: 5 }}
+              activeDot={{ r: 10 }}
               isAnimationActive={false}
               connectNulls
             />

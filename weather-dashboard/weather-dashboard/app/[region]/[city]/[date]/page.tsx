@@ -17,6 +17,7 @@ interface DayResponse {
   winningHigh: number | null;
   winningBracket: string | null;
   ticks: EnrichedTick[];
+  reciprocalTicks: EnrichedTick[];
 }
 
 interface PriceHistoryResponse {
@@ -89,6 +90,7 @@ export default function DayPage({
             <h2 className="text-sm text-subtext mb-2">Forecast temp over the day</h2>
             <TempChart
               ticks={data.ticks}
+              reciprocalTicks={data.reciprocalTicks ?? []}
               unit={data.unit}
               winningLow={data.winningLow}
               winningHigh={data.winningHigh}
