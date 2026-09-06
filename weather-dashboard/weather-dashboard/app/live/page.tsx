@@ -42,6 +42,7 @@ function LiveCityPanel({ city, localDate, localTime }: LiveCity) {
         <div className="space-y-4">
           <TempChart
             ticks={data.ticks as EnrichedTick[]}
+            reciprocalTicks={(data.reciprocalTicks ?? []) as EnrichedTick[]}
             unit={data.unit}
             winningLow={data.winningLow}
             winningHigh={data.winningHigh}
