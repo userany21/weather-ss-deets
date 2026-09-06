@@ -64,8 +64,24 @@ export default function TempChart({
   }
   data.sort((a, b) => a.paced_at - b.paced_at);
 
+  // Count bracket hits per dataset
+  function countByBracket(ts: EnrichedTick[]) {
+    const counts = new Map<string, number>();
+    for (const t of ts) {
+      if (!t.point_bracket) continue;
+      counts.set(t.point_bracket, (counts.get(t.point_bracket) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  const linearCounts = countByBracket(ticks);
+  const reciprocalCounts = countByBracket(reciprocalTicks);
+  const allBrackets = [...new Set([...linearCounts.keys(), ...reciprocalCounts.keys()])]
+    .sort((a, b) => parseInt(a) - parseInt(b));
+
   return (
-    <div className="h-[32rem] w-full">
+    <div className="flex gap-4 w-full">
+      <div className="h-[32rem] flex-1 min-w-0">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
@@ -120,6 +136,33 @@ export default function TempChart({
           />
         </LineChart>
       </ResponsiveContainer>
+      </div>
+
+      {/* Bracket hit tracker */}
+      <div className="shrink-0 self-start pt-6">
+        <table className="text-xs border-collapse">
+          <thead>
+            <tr>
+              <th className="px-2 py-1 text-right text-[#8b92a0]">bracket</th>
+              <th className="px-2 py-1 text-[#5bc0de]">rec</th>
+              <th className="px-2 py-1 text-[#d9534f]">linear</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allBrackets.map((b) => (
+              <tr key={b} className="border-t border-[#22262d]">
+                <td className="px-2 py-1 text-right text-[#8b92a0]">{b}</td>
+                <td className="px-2 py-1 text-center text-[#5bc0de]">
+                  {reciprocalCounts.get(b) ?? 0}
+                </td>
+                <td className="px-2 py-1 text-center text-[#d9534f]">
+                  {linearCounts.get(b) ?? 0}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
