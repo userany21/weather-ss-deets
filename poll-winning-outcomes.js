@@ -11,11 +11,11 @@
  * just rolled over).
  *
  * Resolution logic per check:
- *   - Any hour: if a market's Yes price is exactly 1.0, that's the winner.
- *   - Midnight only (last check of the window): if nothing hit exactly 1.0
- *     yet, fall back to whichever market has the highest Yes price, AS LONG
- *     AS it's >= 0.995 — accepted even if Polymarket hasn't marked the event
- *     closed yet. Tagged identically to a real resolution.
+ *   - Winner is whichever market has the highest Yes price, as soon as that
+ *     price is >= 0.995. Polymarket often pins the book at 0.999 / 0.9995
+ *     (UI shows 100%) hours before it prints an official 1.0 or closes the
+ *     event — we treat that as settled. Tagged identically to a real
+ *     resolution.
  *
  * Already-resolved (city, local_date) pairs are skipped immediately, so a
  * city that resolves at 8pm doesn't get re-checked every hour until midnight.
@@ -185,10 +185,8 @@ async function main() {
     }
     if (!event || !event.markets) continue;
 
-    let winner = findExactWinner(event.markets);
-    if (!winner && isFinalCheck) {
-      winner = findFallbackWinner(event.markets, 0.995);
-    }
+    const winner = findExactWinner(event.markets)
+      || findFallbackWinner(event.markets, 0.995);
     if (!winner) {
       console.log(`  - ${city} ${dateToCheck}: no winner yet (local hour ${hour}${isFinalCheck ? ', final check' : ''})`);
       continue;

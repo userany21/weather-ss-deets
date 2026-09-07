@@ -53,12 +53,15 @@ function parseBracket(market) {
   return { type: 'exact', low: num, high: num };
 }
 
-// Finds the resolved winning market in an event, if any.
-// A market counts as resolved-winner when its "Yes" outcome price is
-// exactly 1 (Polymarket sets this once the market settles).
+// Finds the winning market in an event, if any.
+// Treats the highest Yes price as settled once it is >= 0.995 — Polymarket
+// often pins the book there (UI shows 100%) before closing the event or
+// printing an official 1.0.
 function findWinningMarket(event) {
-  if (!event.closed) return null; // event still live, nothing resolved yet
+  if (!event || !event.markets) return null;
 
+  let best = null;
+  let bestPrice = -1;
   for (const market of event.markets) {
     let outcomes, outcomePrices;
     try {
@@ -69,11 +72,13 @@ function findWinningMarket(event) {
     }
     const yesIndex = outcomes.indexOf('Yes');
     if (yesIndex === -1) continue;
-    if (parseFloat(outcomePrices[yesIndex]) === 1) {
-      return market;
+    const price = parseFloat(outcomePrices[yesIndex]);
+    if (!Number.isNaN(price) && price > bestPrice) {
+      bestPrice = price;
+      best = market;
     }
   }
-  return null; // event closed but no market shows a clean 1.0 Yes (rare/edge case)
+  return bestPrice >= 0.995 ? best : null;
 }
 
 function sleep(ms) {
