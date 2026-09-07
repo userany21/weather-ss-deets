@@ -374,23 +374,23 @@ function FullChart({
       </div>
 
       {/* Last-price summary table */}
-      <div className="shrink-0 pt-5 text-xs text-gray-300">
+      <div className="shrink-0 pt-8 text-lg text-gray-300">
         <table className="border-collapse">
           <thead>
             <tr className="text-left text-gray-500">
-              <th className="pr-4 pb-2">Bracket</th>
-              <th className="pr-4 pb-2">Price</th>
-              <th className="pb-2">Last updated</th>
+              <th className="pr-6 pb-3">Bracket</th>
+              <th className="pr-6 pb-3">Price</th>
+              <th className="pb-3">Last updated</th>
             </tr>
           </thead>
           <tbody>
             {lastPrices.map(({ label, color, price, t_ms }) => (
               <tr key={label} className="border-t border-gray-800">
-                <td className="pr-4 py-1 font-medium" style={{ color }}>{label}</td>
-                <td className="pr-4 py-1 font-mono">
+                <td className="pr-6 py-1.5 font-medium" style={{ color }}>{label}</td>
+                <td className="pr-6 py-1.5 font-mono">
                   {price !== null ? `${price.toFixed(1)}¢` : "—"}
                 </td>
-                <td className="py-1 text-gray-500 font-mono">
+                <td className="py-1.5 text-gray-500 font-mono">
                   {t_ms !== null ? formatClockLocal(t_ms) : "—"}
                 </td>
               </tr>

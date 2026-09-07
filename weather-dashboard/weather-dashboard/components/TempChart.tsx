@@ -97,8 +97,8 @@ export default function TempChart({
             stroke="#8b92a0"
             fontSize={12}
             domain={([dataMin, dataMax]: [number, number]) => [
-              Math.floor(dataMin - 3),
-              Math.ceil(dataMax + 3),
+              Math.floor(dataMin - 1),
+              Math.ceil(dataMax + 1),
             ]}
             label={{ value: `Weighted avg temp (${unit})`, angle: -90, position: "insideLeft", fill: "#8b92a0" }}
           />
@@ -139,23 +139,23 @@ export default function TempChart({
       </div>
 
       {/* Bracket hit tracker */}
-      <div className="shrink-0 self-start pt-6">
-        <table className="text-xs border-collapse">
+      <div className="shrink-0 self-start pt-9">
+        <table className="text-lg border-collapse">
           <thead>
             <tr>
-              <th className="px-2 py-1 text-right text-[#8b92a0]">bracket</th>
-              <th className="px-2 py-1 text-[#5bc0de]">rec</th>
-              <th className="px-2 py-1 text-[#d9534f]">linear</th>
+              <th className="px-3 py-1.5 text-right text-[#8b92a0]">bracket</th>
+              <th className="px-3 py-1.5 text-[#5bc0de]">rec</th>
+              <th className="px-3 py-1.5 text-[#d9534f]">linear</th>
             </tr>
           </thead>
           <tbody>
             {allBrackets.map((b) => (
               <tr key={b} className="border-t border-[#22262d]">
-                <td className="px-2 py-1 text-right text-[#8b92a0]">{b}</td>
-                <td className="px-2 py-1 text-center text-[#5bc0de]">
+                <td className="px-3 py-1.5 text-right text-[#8b92a0]">{b}</td>
+                <td className="px-3 py-1.5 text-center text-[#5bc0de]">
                   {reciprocalCounts.get(b) ?? 0}
                 </td>
-                <td className="px-2 py-1 text-center text-[#d9534f]">
+                <td className="px-3 py-1.5 text-center text-[#d9534f]">
                   {linearCounts.get(b) ?? 0}
                 </td>
               </tr>
