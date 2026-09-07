@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCityConfig } from "@/lib/cities-config";
+import { getPriceHistoryCacheCollection } from "@/lib/mongodb";
 
 // ---------------------------------------------------------------------------
 // Helpers — mirrors the slug-building logic in backfill-winning-outcomes.js
@@ -103,6 +104,11 @@ export interface BracketResult {
   history: BracketHistoryEntry[];
 }
 
+// How long today's cached entry stays fresh before we re-fetch from Polymarket.
+// Matches the Next.js ISR revalidate window so we never hit Polymarket more
+// than once per revalidation cycle even if the ISR cache itself is cold.
+const LIVE_CACHE_TTL_MS = revalidate * 1000; // 300 s → 300_000 ms
+
 export async function GET(
   _req: Request,
   { params }: { params: { city: string; date: string } }
@@ -120,6 +126,31 @@ export async function GET(
   // Real UTC window covering 8am–6pm local time on this date
   const startTs = localHourToUtcSeconds(date, 8, tzOffsetMs);
   const endTs   = localHourToUtcSeconds(date, 18, tzOffsetMs);
+
+  // Is this a historical date (market already closed) or today/future?
+  // We use UTC date so comparisons are consistent across timezones.
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const isHistorical = date < todayUtc;
+
+  // ------------------------------------------------------------------
+  // 0b. MongoDB cache check — avoids re-fetching full UTC day from CLOB
+  //     Historical dates: serve from cache forever (prices never change).
+  //     Today's date:     serve from cache only if fresh (< TTL).
+  // ------------------------------------------------------------------
+  const cacheCol = await getPriceHistoryCacheCollection();
+  const cached = await cacheCol.findOne({ city, date }) as {
+    tzOffsetMs: number;
+    brackets: BracketResult[];
+    cachedAt: Date;
+  } | null;
+
+  if (cached) {
+    const age = Date.now() - new Date(cached.cachedAt).getTime();
+    if (isHistorical || age < LIVE_CACHE_TTL_MS) {
+      return NextResponse.json({ brackets: cached.brackets, tzOffsetMs: cached.tzOffsetMs });
+    }
+    // Cache exists but is stale for today — fall through to re-fetch
+  }
 
   const slug = buildEventSlug(city, date);
 
@@ -184,8 +215,11 @@ export async function GET(
   });
 
   // ------------------------------------------------------------------
-  // 3. Fetch price histories from CLOB API in parallel
-  //    Scoped to 8am–6pm local via startTs/endTs
+  // 3. Fetch price histories from CLOB API in parallel.
+  //    The CLOB API's interval=1d ignores startTs/endTs and always returns
+  //    the full UTC day, so we trim to the 8am–6pm local window here.
+  //    The trimmed result is then stored in MongoDB so future requests skip
+  //    this expensive fan-out entirely.
   // ------------------------------------------------------------------
   const histories = await Promise.all(
     bracketMetas.map(async (bm) => {
@@ -200,9 +234,7 @@ export async function GET(
         const res = await fetch(url, { next: { revalidate } });
         if (!res.ok) return { ...bm, history: [] as BracketHistoryEntry[] };
         const data = await res.json();
-        // Filter to the 8am–6pm local window. The CLOB API's interval=1d
-        // ignores startTs/endTs and always returns the full UTC day, so we
-        // trim here after the fact.
+        // Trim to the 8am–6pm local window (CLOB ignores our time bounds)
         const history = ((data.history ?? []) as BracketHistoryEntry[]).filter(
           (h) => h.t >= startTs && h.t <= endTs
         );
@@ -214,7 +246,7 @@ export async function GET(
   );
 
   // ------------------------------------------------------------------
-  // 4. Assign colors and return (include tzOffsetMs for snap alignment)
+  // 4. Assign colors
   // ------------------------------------------------------------------
   const brackets: BracketResult[] = histories.map((h, i) => ({
     label: h.label,
@@ -222,6 +254,16 @@ export async function GET(
     color: BRACKET_COLORS[i % BRACKET_COLORS.length],
     history: h.history,
   }));
+
+  // ------------------------------------------------------------------
+  // 5. Persist trimmed result to MongoDB cache (upsert).
+  //    Fire-and-forget — don't await so we don't delay the response.
+  // ------------------------------------------------------------------
+  cacheCol.updateOne(
+    { city, date },
+    { $set: { city, date, tzOffsetMs, brackets, cachedAt: new Date() } },
+    { upsert: true }
+  ).catch((err) => console.error("[prices-history] cache write failed:", err));
 
   return NextResponse.json({ brackets, tzOffsetMs });
 }

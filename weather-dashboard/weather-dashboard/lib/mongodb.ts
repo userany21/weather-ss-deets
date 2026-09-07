@@ -39,3 +39,14 @@ export async function getReciprocalCollection() {
   const db = await getDb();
   return db.collection("reciprocal");
 }
+
+/**
+ * Stores trimmed Polymarket bracket price histories per (city, date) so we
+ * avoid re-fetching the full UTC day from the CLOB API on every revalidation.
+ * Historical days are cached permanently; today's entries include a cachedAt
+ * field that the route uses to decide whether to refresh.
+ */
+export async function getPriceHistoryCacheCollection() {
+  const db = await getDb();
+  return db.collection("price-history-cache");
+}

@@ -46,6 +46,36 @@ function formatClock(ms: number, tzOffsetMs = 0) {
 }
 
 /**
+ * Binary search over a time-ordered history array to find the entry whose
+ * `t` (unix seconds) is closest to `targetMs` (milliseconds).
+ *
+ * O(log n) vs the previous O(n) linear scan. History is guaranteed sorted
+ * ascending by t because the CLOB API always returns it that way.
+ */
+function findClosest(
+  history: { t: number; p: number }[],
+  targetMs: number
+): { t: number; p: number } {
+  let lo = 0;
+  let hi = history.length - 1;
+
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1; // fast integer divide by 2
+    if (history[mid].t * 1000 < targetMs) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  // lo is the first entry >= targetMs; compare with lo-1 to find the true closest
+  if (lo === 0) return history[0];
+  const before = history[lo - 1];
+  const after  = history[lo];
+  return targetMs - before.t * 1000 <= after.t * 1000 - targetMs ? before : after;
+}
+
+/**
  * For each EnrichedTick with a paced_at + point_bracket, find the closest
  * timestamp in that bracket's price history and record it.
  *
@@ -79,15 +109,9 @@ function buildSnapMap(
     // Convert fake-UTC paced_at → real UTC ms
     const realPacedAt = tick.paced_at - tzOffsetMs;
 
-    let best = history[0];
-    let bestDiff = Math.abs(best.t * 1000 - realPacedAt);
-    for (const h of history) {
-      const diff = Math.abs(h.t * 1000 - realPacedAt);
-      if (diff < bestDiff) {
-        best = h;
-        bestDiff = diff;
-      }
-    }
+    // Binary search — O(log n) instead of the previous O(n) linear scan
+    const best = findClosest(history, realPacedAt);
+
     // Only overwrite if this tick's bracket is the same (last tick wins for
     // duplicate snaps on the same timestamp — rare edge case).
     snapMap.set(`${tick.point_bracket}__${best.t * 1000}`, tick.point_bracket);
@@ -134,21 +158,26 @@ function makeSnapDot(bracketLabel: string, color: string, snapMap: Map<string, s
 // ---------------------------------------------------------------------------
 
 function FallbackChart({ ticks }: { ticks: EnrichedTick[] }) {
-  const data = ticks
-    .filter((t) => t.paced_at !== null && t.yes_price !== null)
-    .map((t) => ({
-      t_ms: t.paced_at as number,
-      price_cents: (t.yes_price as number) * 100,
-      point_bracket: t.point_bracket,
-    }));
+  // Memoised so filter+map+loop don't re-run on every parent render when
+  // `ticks` hasn't actually changed.
+  const { data, switchTimes } = useMemo(() => {
+    const data = ticks
+      .filter((t) => t.paced_at !== null && t.yes_price !== null)
+      .map((t) => ({
+        t_ms: t.paced_at as number,
+        price_cents: (t.yes_price as number) * 100,
+        point_bracket: t.point_bracket,
+      }));
 
-  // Dashed vertical lines at bracket-switch moments
-  const switchTimes: number[] = [];
-  let prev: string | null = null;
-  for (const d of data) {
-    if (prev !== null && d.point_bracket !== prev) switchTimes.push(d.t_ms);
-    prev = d.point_bracket ?? prev;
-  }
+    // Dashed vertical lines at bracket-switch moments
+    const switchTimes: number[] = [];
+    let prev: string | null = null;
+    for (const d of data) {
+      if (prev !== null && d.point_bracket !== prev) switchTimes.push(d.t_ms);
+      prev = d.point_bracket ?? prev;
+    }
+    return { data, switchTimes };
+  }, [ticks]);
 
   return (
     <div className="h-[32rem] w-full">
