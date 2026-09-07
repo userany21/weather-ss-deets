@@ -24,7 +24,7 @@
 require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
-const MONGO_URI = process.env.MONGODB_URI;
+const MONGODB_URI = process.env.MONGO_URI;
 const DB_NAME = process.env.MONGODB_DB || 'weather';
 
 // ---------- Ported transform logic ----------
