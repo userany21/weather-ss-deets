@@ -10,25 +10,22 @@
  *   3. Per city, which method (linear or reciprocal) has better day-wide
  *      accuracy (not just the final tick)?
  *
- * Usage:
- *   node stats/weather-signal-analysis.js
- *
- * Requires: mongodb (already in root package.json), dotenv
- * Env:      MONGO_URI  (connection string — same var used by all other scripts)
+ * Requires: npm install mongodb dotenv
+ * Env: MONGODB_URI (connection string), MONGODB_DB (default "weather")
  *
  * NOTE: paced_at / point_bracket logic below is a direct port of the
- * algorithm from weather-transform.ts. If your real enrichDay() formats
- * point_bracket labels differently (e.g. rounding, or single-degree vs
- * range formatting), the string comparisons against winning_bracket will
- * silently mismatch. Worth spot-checking a few days of output against
- * your dashboard before trusting the numbers.
+ * algorithm you described from weather-transform.ts. If your real
+ * enrichDay() formats point_bracket labels differently (e.g. rounding,
+ * or single-degree vs range formatting), the string comparisons against
+ * winning_bracket will silently mismatch. Worth spot-checking a few days
+ * of output against your dashboard before trusting the numbers.
  */
 
 require('dotenv').config();
 const { MongoClient } = require('mongodb');
 
-const MONGO_URI = process.env.MONGO_URI;
-const DB_NAME = 'weather';
+const MONGODB_URI = process.env.MONGODB_URI;
+const DB_NAME = process.env.MONGODB_DB || 'weather';
 
 // ---------- Ported transform logic ----------
 
@@ -72,7 +69,8 @@ function computePointBracket(temp, unit, winningLow, winningHigh) {
   }
   const low = anchor + width * Math.floor((temp - anchor) / width);
   const high = low + width - 1;
-  return width === 1 ? `${low}` : `${low}-${high}`;
+  const unitLabel = unit ? `\u00B0${unit}` : '';
+  return width === 1 ? `${low}${unitLabel}` : `${low}-${high}${unitLabel}`;
 }
 
 // ---------- Stat accumulators ----------
@@ -90,12 +88,12 @@ function avg(bucket) {
 // ---------- Main ----------
 
 async function main() {
-  if (!MONGO_URI) {
-    console.error('Set MONGO_URI in your environment or a .env file.');
+  if (!MONGODB_URI) {
+    console.error('Set MONGODB_URI in your environment or a .env file.');
     process.exit(1);
   }
 
-  const client = new MongoClient(MONGO_URI);
+  const client = new MongoClient(MONGODB_URI);
   await client.connect();
   const db = client.db(DB_NAME);
   const highTempCol = db.collection('high-temp');
@@ -109,6 +107,9 @@ async function main() {
     .toArray();
 
   console.log(`Found ${settledDays.length} settled city-days.`);
+
+  // --- One-time sanity check: does our computed label actually match the stored format? ---
+  let debugPrinted = false;
 
   const hourlyEdge = {};              // key: hourBucket
   const cityHourlyEdge = {};          // key: "city|hourBucket"
@@ -137,6 +138,24 @@ async function main() {
 
     if (!linearTicks[0] || linearTicks[0].paced_at == null) continue;
     const dayStart = linearTicks[0].paced_at;
+
+    if (!debugPrinted) {
+      const sample = linearTicks.find((t) => t.point_bracket != null);
+      if (sample) {
+        console.log('\n--- FORMAT SANITY CHECK (first sample) ---');
+        console.log('stored winning_bracket:   ', JSON.stringify(winning_bracket));
+        console.log('computed point_bracket:   ', JSON.stringify(sample.point_bracket));
+        console.log('weighted_avg / unit:      ', sample.weighted_avg, sample.unit);
+        console.log('winning_bracket_low/high: ', winning_bracket_low, winning_bracket_high);
+        console.log(
+          sample.point_bracket === winning_bracket || true
+            ? 'If these two strings don\'t look identical in format, fix computePointBracket before trusting any stats below.'
+            : ''
+        );
+        console.log('-------------------------------------------\n');
+        debugPrinted = true;
+      }
+    }
 
     if (!cityAccuracy[city]) {
       cityAccuracy[city] = { linear: { matches: 0, total: 0 }, reciprocal: { matches: 0, total: 0 } };
