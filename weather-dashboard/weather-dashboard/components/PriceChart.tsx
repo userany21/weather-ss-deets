@@ -313,48 +313,91 @@ function FullChart({
     [bracketHistories, snapMap]
   );
 
+  // Last recorded price + timestamp per bracket
+  const lastPrices = useMemo(
+    () =>
+      bracketHistories.map((b) => {
+        const last = b.history[b.history.length - 1];
+        return {
+          label: b.label,
+          color: b.color,
+          price: last ? last.p * 100 : null,
+          t_ms: last ? last.t * 1000 : null,
+        };
+      }),
+    [bracketHistories]
+  );
+
   return (
-    <div className="h-[32rem] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
-          <XAxis
-            dataKey="t_ms"
-            type="number"
-            domain={["dataMin", "dataMax"]}
-            tickFormatter={formatClockLocal}
-            stroke="#8b92a0"
-            fontSize={12}
-          />
-          <YAxis
-            domain={[0, 100]}
-            stroke="#8b92a0"
-            fontSize={12}
-            label={{ value: "Yes price (cents)", angle: -90, position: "insideLeft", fill: "#8b92a0" }}
-          />
-          <Tooltip
-            labelFormatter={(v: number) => formatClockLocal(v)}
-            contentStyle={{ background: "#14171c", border: "1px solid #22262d" }}
-            formatter={(v: number, name: string) => [`${v.toFixed(1)}¢`, name]}
-          />
-          <Legend
-            wrapperStyle={{ fontSize: 10, color: "#8b92a0", paddingTop: 4 }}
-          />
-          {bracketHistories.map((b) => (
-            <Line
-              key={b.label}
-              type="monotone"
-              dataKey={b.label}
-              stroke={b.color}
-              strokeWidth={1.5}
-              dot={snapDots[b.label]}
-              activeDot={{ r: 10 }}
-              isAnimationActive={false}
-              connectNulls
+    <div className="flex gap-4 items-start w-full">
+      <div className="h-[32rem] flex-1 min-w-0">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
+            <XAxis
+              dataKey="t_ms"
+              type="number"
+              domain={["dataMin", "dataMax"]}
+              tickFormatter={formatClockLocal}
+              stroke="#8b92a0"
+              fontSize={12}
             />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
+            <YAxis
+              domain={[0, 100]}
+              stroke="#8b92a0"
+              fontSize={12}
+              label={{ value: "Yes price (cents)", angle: -90, position: "insideLeft", fill: "#8b92a0" }}
+            />
+            <Tooltip
+              labelFormatter={(v: number) => formatClockLocal(v)}
+              contentStyle={{ background: "#14171c", border: "1px solid #22262d" }}
+              formatter={(v: number, name: string) => [`${v.toFixed(1)}¢`, name]}
+            />
+            <Legend
+              wrapperStyle={{ fontSize: 10, color: "#8b92a0", paddingTop: 4 }}
+            />
+            {bracketHistories.map((b) => (
+              <Line
+                key={b.label}
+                type="monotone"
+                dataKey={b.label}
+                stroke={b.color}
+                strokeWidth={1.5}
+                dot={snapDots[b.label]}
+                activeDot={{ r: 10 }}
+                isAnimationActive={false}
+                connectNulls
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Last-price summary table */}
+      <div className="shrink-0 pt-5 text-xs text-gray-300">
+        <table className="border-collapse">
+          <thead>
+            <tr className="text-left text-gray-500">
+              <th className="pr-4 pb-2">Bracket</th>
+              <th className="pr-4 pb-2">Price</th>
+              <th className="pb-2">Last updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lastPrices.map(({ label, color, price, t_ms }) => (
+              <tr key={label} className="border-t border-gray-800">
+                <td className="pr-4 py-1 font-medium" style={{ color }}>{label}</td>
+                <td className="pr-4 py-1 font-mono">
+                  {price !== null ? `${price.toFixed(1)}¢` : "—"}
+                </td>
+                <td className="py-1 text-gray-500 font-mono">
+                  {t_ms !== null ? formatClockLocal(t_ms) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
