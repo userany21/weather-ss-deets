@@ -178,6 +178,7 @@ async function main() {
         const exKey = `${city}|${hourBucket}|${method}`;
         if (!cityHourExamples[exKey]) cityHourExamples[exKey] = [];
         cityHourExamples[exKey].push({
+          method,
           local_date,
           pacing_time: t.pacing_time,
           weighted_avg: t.weighted_avg,
