@@ -170,6 +170,7 @@ async function main() {
       for (const t of ticks) {
         if (t.weighted_avg == null || t.yes_price == null || t.paced_at == null) continue;
         const hourBucket = Math.floor((t.paced_at - dayStart) / 3600000);
+        if (hourBucket < 0 || hourBucket > 9) continue; // outside the real 8am-6pm scrape window — drop as bad data
         const outcome = t.point_bracket === winning_bracket ? 1 : 0;
         const edge = outcome - t.yes_price;
 
