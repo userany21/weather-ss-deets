@@ -27,6 +27,57 @@ const { MongoClient } = require('mongodb');
 const MONGODB_URI = process.env.MONGO_URI;
 const DB_NAME = process.env.MONGODB_DB || 'weather';
 
+// Fixed UTC offsets (hours) for the current DST period (early September 2026).
+// Approximate on purpose — good enough for labeling, will drift if you run this
+// script across a DST transition (e.g. into November for US cities).
+const CITY_UTC_OFFSET = {
+  'san francisco': -7,
+  'seattle': -7,
+  'los angeles': -7,
+  'nyc': -4,
+  'atlanta': -4,
+  'miami': -4,
+  'houston': -5,
+  'hong kong': 8,
+  'shenzhen': 8,
+  'beijing': 8,
+  'shanghai': 8,
+  'tokyo': 9,
+  'seoul': 9,
+  'singapore': 8,
+  'london': 1,
+  'munich': 2,
+  'milan': 2,
+  'amsterdam': 2,
+  'madrid': 2,
+  'paris': 2,
+  'wellington': 12,
+};
+const SAN_DIEGO_UTC_OFFSET = -7; // PDT, early September
+
+function mod24(h) {
+  return ((h % 24) + 24) % 24;
+}
+
+function formatHour12(h) {
+  const period = h < 12 ? 'AM' : 'PM';
+  let displayHour = h % 12;
+  if (displayHour === 0) displayHour = 12;
+  return `${displayHour}:00${period}`;
+}
+
+// Given a city and an "hour since 8am local" bucket, return the matching
+// San Diego clock-time range as a string, e.g. "9:00PM-10:00PM".
+function sanDiegoRangeForBucket(city, hour) {
+  const cityOffset = CITY_UTC_OFFSET[city];
+  if (cityOffset == null) return null;
+  const localStart = 8 + hour;
+  const localEnd = localStart + 1;
+  const sdStart = mod24(localStart - cityOffset + SAN_DIEGO_UTC_OFFSET);
+  const sdEnd = mod24(localEnd - cityOffset + SAN_DIEGO_UTC_OFFSET);
+  return `${formatHour12(sdStart)}-${formatHour12(sdEnd)}`;
+}
+
 // ---------- Ported transform logic ----------
 
 function parseMinutesSinceMidnight(pacingTime) {
@@ -284,7 +335,7 @@ async function main() {
       .sort((a, b) => (a.local_date < b.local_date ? 1 : -1))
       .slice(0, 5);
     if (!examples.length) continue;
-    console.log(`\n-- ${city} — hour ${v.bestLinear.hour}, avg edge ${v.bestLinear.edge.toFixed(4)} over ${v.bestLinear.n} ticks --`);
+    console.log(`\n-- ${city} — hour ${v.bestLinear.hour}${sanDiegoRangeForBucket(city, v.bestLinear.hour) ? ` (${sanDiegoRangeForBucket(city, v.bestLinear.hour)})` : ''}, avg edge ${v.bestLinear.edge.toFixed(4)} over ${v.bestLinear.n} ticks --`);
     console.table(examples);
   }
 
