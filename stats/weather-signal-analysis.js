@@ -115,6 +115,7 @@ async function main() {
   const cityHourlyEdge = {};          // key: "city|hourBucket"
   const disagreement = {};            // key: city
   const cityAccuracy = {};            // key: city
+  const cityHourExamples = {};        // key: "city|hourBucket|method" -> array of example rows
 
   for (const { _id: { city, local_date } } of settledDays) {
     const [linearRaw, reciprocalRaw] = await Promise.all([
@@ -173,6 +174,20 @@ async function main() {
 
         cityAccuracy[city][method].total += 1;
         cityAccuracy[city][method].matches += outcome;
+
+        const exKey = `${city}|${hourBucket}|${method}`;
+        if (!cityHourExamples[exKey]) cityHourExamples[exKey] = [];
+        cityHourExamples[exKey].push({
+          local_date,
+          pacing_time: t.pacing_time,
+          weighted_avg: t.weighted_avg,
+          unit: t.unit,
+          point_bracket: t.point_bracket,
+          winning_bracket,
+          hit: outcome === 1 ? 'YES' : 'no',
+          yes_price: t.yes_price,
+          edge: Number(edge.toFixed(4)),
+        });
       }
     };
 
@@ -243,6 +258,20 @@ async function main() {
       reciprocal_edge: v.bestReciprocal?.edge?.toFixed(4) ?? '-',
     }))
   );
+
+  console.log('\n=== Examples backing each city\'s best linear hour ===');
+  console.log('(most recent 5 ticks that landed in that city\'s best hour bucket, so you can eyeball whether the stat holds up)');
+  for (const [city, v] of Object.entries(cityBestHour)) {
+    if (!v.bestLinear) continue;
+    const exKey = `${city}|${v.bestLinear.hour}|linear`;
+    const examples = (cityHourExamples[exKey] || [])
+      .slice()
+      .sort((a, b) => (a.local_date < b.local_date ? 1 : -1))
+      .slice(0, 5);
+    if (!examples.length) continue;
+    console.log(`\n-- ${city} — hour ${v.bestLinear.hour}, avg edge ${v.bestLinear.edge.toFixed(4)} over ${v.bestLinear.n} ticks --`);
+    console.table(examples);
+  }
 
   console.log('\n=== Disagreement tiebreaker (when point_bracket differs) ===');
   console.table(
