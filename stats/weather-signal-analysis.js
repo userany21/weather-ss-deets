@@ -55,6 +55,42 @@ const CITY_UTC_OFFSET = {
 };
 const SAN_DIEGO_UTC_OFFSET = -7; // PDT, early September
 
+const CITY_REGION = {
+  'san francisco': 'america',
+  'seattle': 'america',
+  'los angeles': 'america',
+  'nyc': 'america',
+  'atlanta': 'america',
+  'miami': 'america',
+  'houston': 'america',
+  'hong kong': 'asia',
+  'shenzhen': 'asia',
+  'beijing': 'asia',
+  'shanghai': 'asia',
+  'tokyo': 'asia',
+  'seoul': 'asia',
+  'singapore': 'asia',
+  'wellington': 'asia', // not part of your roster's region grouping, bucketed here just to keep it out of "other"
+  'london': 'europe',
+  'munich': 'europe',
+  'milan': 'europe',
+  'amsterdam': 'europe',
+  'madrid': 'europe',
+  'paris': 'europe',
+};
+const REGION_ORDER = ['america', 'europe', 'asia', 'other'];
+
+function regionOf(city) {
+  return CITY_REGION[city] || 'other';
+}
+
+function byRegionThenCity(cityA, cityB) {
+  const ra = REGION_ORDER.indexOf(regionOf(cityA));
+  const rb = REGION_ORDER.indexOf(regionOf(cityB));
+  if (ra !== rb) return ra - rb;
+  return cityA.localeCompare(cityB);
+}
+
 function mod24(h) {
   return ((h % 24) + 24) % 24;
 }
@@ -316,19 +352,28 @@ async function main() {
     }
   }
   console.table(
-    Object.entries(cityBestHour).map(([city, v]) => ({
-      city,
-      best_hour_linear: v.bestLinear?.hour ?? '-',
-      linear_edge: v.bestLinear?.edge?.toFixed(4) ?? '-',
-      best_hour_reciprocal: v.bestReciprocal?.hour ?? '-',
-      reciprocal_edge: v.bestReciprocal?.edge?.toFixed(4) ?? '-',
-    }))
+    Object.entries(cityBestHour)
+      .sort(([a], [b]) => byRegionThenCity(a, b))
+      .map(([city, v]) => ({
+        region: regionOf(city),
+        city,
+        best_hour_linear: v.bestLinear?.hour ?? '-',
+        linear_edge: v.bestLinear?.edge?.toFixed(4) ?? '-',
+        best_hour_reciprocal: v.bestReciprocal?.hour ?? '-',
+        reciprocal_edge: v.bestReciprocal?.edge?.toFixed(4) ?? '-',
+      }))
   );
 
   console.log('\n=== Examples backing each city\'s best linear hour ===');
   console.log('(most recent 5 ticks that landed in that city\'s best hour bucket, so you can eyeball whether the stat holds up)');
-  for (const [city, v] of Object.entries(cityBestHour)) {
+  let lastRegionPrinted = null;
+  for (const [city, v] of Object.entries(cityBestHour).sort(([a], [b]) => byRegionThenCity(a, b))) {
     if (!v.bestLinear) continue;
+    const region = regionOf(city);
+    if (region !== lastRegionPrinted) {
+      console.log(`\n### ${region.toUpperCase()} ###`);
+      lastRegionPrinted = region;
+    }
     const exKey = `${city}|${v.bestLinear.hour}|linear`;
     const examples = (cityHourExamples[exKey] || [])
       .slice()
@@ -341,31 +386,37 @@ async function main() {
 
   console.log('\n=== Disagreement tiebreaker (when point_bracket differs) ===');
   console.table(
-    Object.entries(disagreement).map(([city, d]) => ({
-      city,
-      disagreements: d.total,
-      linear_right_pct: d.total ? ((d.linearRight / d.total) * 100).toFixed(1) : '-',
-      reciprocal_right_pct: d.total ? ((d.reciprocalRight / d.total) * 100).toFixed(1) : '-',
-      both_right_pct: d.total ? ((d.bothRight / d.total) * 100).toFixed(1) : '-',
-      both_wrong_pct: d.total ? ((d.bothWrong / d.total) * 100).toFixed(1) : '-',
-    }))
+    Object.entries(disagreement)
+      .sort(([a], [b]) => byRegionThenCity(a, b))
+      .map(([city, d]) => ({
+        region: regionOf(city),
+        city,
+        disagreements: d.total,
+        linear_right_pct: d.total ? ((d.linearRight / d.total) * 100).toFixed(1) : '-',
+        reciprocal_right_pct: d.total ? ((d.reciprocalRight / d.total) * 100).toFixed(1) : '-',
+        both_right_pct: d.total ? ((d.bothRight / d.total) * 100).toFixed(1) : '-',
+        both_wrong_pct: d.total ? ((d.bothWrong / d.total) * 100).toFixed(1) : '-',
+      }))
   );
 
   console.log('\n=== Day-wide accuracy per city (fraction of ALL ticks matching winning bracket) ===');
   console.table(
-    Object.entries(cityAccuracy).map(([city, a]) => ({
-      city,
-      linear_pct: a.linear.total ? ((a.linear.matches / a.linear.total) * 100).toFixed(1) : '-',
-      linear_n: a.linear.total,
-      reciprocal_pct: a.reciprocal.total ? ((a.reciprocal.matches / a.reciprocal.total) * 100).toFixed(1) : '-',
-      reciprocal_n: a.reciprocal.total,
-      preferred_method:
-        a.linear.total && a.reciprocal.total
-          ? a.linear.matches / a.linear.total > a.reciprocal.matches / a.reciprocal.total
-            ? 'linear'
-            : 'reciprocal'
-          : '-',
-    }))
+    Object.entries(cityAccuracy)
+      .sort(([a], [b]) => byRegionThenCity(a, b))
+      .map(([city, a]) => ({
+        region: regionOf(city),
+        city,
+        linear_pct: a.linear.total ? ((a.linear.matches / a.linear.total) * 100).toFixed(1) : '-',
+        linear_n: a.linear.total,
+        reciprocal_pct: a.reciprocal.total ? ((a.reciprocal.matches / a.reciprocal.total) * 100).toFixed(1) : '-',
+        reciprocal_n: a.reciprocal.total,
+        preferred_method:
+          a.linear.total && a.reciprocal.total
+            ? a.linear.matches / a.linear.total > a.reciprocal.matches / a.reciprocal.total
+              ? 'linear'
+              : 'reciprocal'
+            : '-',
+      }))
   );
 
   await client.close();
