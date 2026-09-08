@@ -138,7 +138,11 @@ async function main() {
     }));
 
     if (!linearTicks[0] || linearTicks[0].paced_at == null) continue;
-    const dayStart = linearTicks[0].paced_at;
+    // Fixed anchor: 8am local, not "whenever the first tick of the day happened to land."
+    // This keeps hour buckets meaning the same thing on every day, even if the scraper
+    // started late or had a gap on a particular day.
+    const dayStart = Date.parse(`${local_date}T00:00:00Z`) + 8 * 3600000;
+    const firstTickPacing = linearTicks[0].pacing_time; // kept only as a diagnostic, not used for bucketing
 
     if (!debugPrinted) {
       const sample = linearTicks.find((t) => t.point_bracket != null);
@@ -180,6 +184,7 @@ async function main() {
         cityHourExamples[exKey].push({
           method,
           local_date,
+          first_tick_pacing: firstTickPacing,
           pacing_time: t.pacing_time,
           weighted_avg: t.weighted_avg,
           unit: t.unit,
