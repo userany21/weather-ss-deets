@@ -201,12 +201,20 @@ async function main() {
     processMethod('linear', linearTicks);
     processMethod('reciprocal', reciprocalTicks);
 
-    // Disagreement tiebreaker: pair ticks by pacing_time within the same city-day
+    // Disagreement tiebreaker: pair ticks by pacing_time within the same city-day,
+    // restricted to the real 8am-6pm window (hour 0-9), same as every other table.
     if (!disagreement[city]) {
       disagreement[city] = { total: 0, linearRight: 0, reciprocalRight: 0, bothRight: 0, bothWrong: 0 };
     }
-    const reciprocalByPacing = new Map(reciprocalTicks.map((t) => [t.pacing_time, t]));
-    for (const lt of linearTicks) {
+    const inWindow = (tk) => {
+      if (tk.paced_at == null) return false;
+      const hb = Math.floor((tk.paced_at - dayStart) / 3600000);
+      return hb >= 0 && hb <= 9;
+    };
+    const linearInWindow = linearTicks.filter(inWindow);
+    const reciprocalInWindow = reciprocalTicks.filter(inWindow);
+    const reciprocalByPacing = new Map(reciprocalInWindow.map((t) => [t.pacing_time, t]));
+    for (const lt of linearInWindow) {
       const rt = reciprocalByPacing.get(lt.pacing_time);
       if (!rt || lt.point_bracket == null || rt.point_bracket == null) continue;
       if (lt.point_bracket === rt.point_bracket) continue; // they agree, not a tiebreak case
