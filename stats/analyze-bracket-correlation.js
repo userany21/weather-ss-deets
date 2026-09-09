@@ -22,7 +22,6 @@
  *   --csv=out.csv         also dump the per-city-day rows to a CSV
  */
 
-require("dotenv").config();
 const { MongoClient } = require("mongodb");
 
 const MONGO_URI = process.env.MONGO_URI;
@@ -201,6 +200,18 @@ async function main() {
     combined: { hits: 0, total: 0, ranks: [] },
   };
 
+  const cityStats = new Map(); // city -> same shape as `stats`
+  function getCityStats(city) {
+    if (!cityStats.has(city)) {
+      cityStats.set(city, {
+        linear: { hits: 0, total: 0, ranks: [] },
+        reciprocal: { hits: 0, total: 0, ranks: [] },
+        combined: { hits: 0, total: 0, ranks: [] },
+      });
+    }
+    return cityStats.get(city);
+  }
+
   const rows = [];
 
   for (const key of keys) {
@@ -224,18 +235,33 @@ async function main() {
       if (lHit) stats.linear.hits++;
       const rk = rankOf(winningBracket, lTop.sorted);
       if (rk) stats.linear.ranks.push(rk);
+
+      const cs = getCityStats(city);
+      cs.linear.total++;
+      if (lHit) cs.linear.hits++;
+      if (rk) cs.linear.ranks.push(rk);
     }
     if (rMap.size) {
       stats.reciprocal.total++;
       if (rHit) stats.reciprocal.hits++;
       const rk = rankOf(winningBracket, rTop.sorted);
       if (rk) stats.reciprocal.ranks.push(rk);
+
+      const cs = getCityStats(city);
+      cs.reciprocal.total++;
+      if (rHit) cs.reciprocal.hits++;
+      if (rk) cs.reciprocal.ranks.push(rk);
     }
     if (cMap.size) {
       stats.combined.total++;
       if (cHit) stats.combined.hits++;
       const rk = rankOf(winningBracket, cTop.sorted);
       if (rk) stats.combined.ranks.push(rk);
+
+      const cs = getCityStats(city);
+      cs.combined.total++;
+      if (cHit) cs.combined.hits++;
+      if (rk) cs.combined.ranks.push(rk);
     }
 
     rows.push({
@@ -310,6 +336,40 @@ async function main() {
       2
     )} (naive random baseline hit rate ~= ${pct(1, avgBracketsTicked)})`
   );
+
+  // ---- Per-city breakdown ----
+  console.log("\n=== Per-city breakdown ===\n");
+  const cityRows = [...cityStats.entries()]
+    .map(([city, cs]) => ({
+      city,
+      days: cs.combined.total,
+      combinedHits: cs.combined.hits,
+      combinedPct: pct(cs.combined.hits, cs.combined.total),
+      linearHits: cs.linear.hits,
+      linearTotal: cs.linear.total,
+      linearPct: pct(cs.linear.hits, cs.linear.total),
+      recHits: cs.reciprocal.hits,
+      recTotal: cs.reciprocal.total,
+      recPct: pct(cs.reciprocal.hits, cs.reciprocal.total),
+      combinedAvgRank: avg(cs.combined.ranks),
+    }))
+    // worst combined hit rate first, so the problem cities float to the top
+    .sort((a, b) => a.combinedHits / (a.days || 1) - b.combinedHits / (b.days || 1));
+
+  const cityColWidth = Math.max(...cityRows.map((r) => r.city.length), "city".length) + 2;
+  console.log(
+    `${"city".padEnd(cityColWidth)}days  combined        linear          reciprocal      avg_rank`
+  );
+  for (const r of cityRows) {
+    console.log(
+      `${r.city.padEnd(cityColWidth)}` +
+        `${String(r.days).padEnd(6)}` +
+        `${`${r.combinedHits}/${r.days} (${r.combinedPct})`.padEnd(16)}` +
+        `${`${r.linearHits}/${r.linearTotal} (${r.linearPct})`.padEnd(16)}` +
+        `${`${r.recHits}/${r.recTotal} (${r.recPct})`.padEnd(16)}` +
+        `${r.combinedAvgRank}`
+    );
+  }
 
   if (args.csv) {
     const fs = require("fs");
