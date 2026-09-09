@@ -22,6 +22,7 @@
  *   --csv=out.csv         also dump the per-city-day rows to a CSV
  */
 
+require("dotenv").config();
 const { MongoClient } = require("mongodb");
 
 const MONGO_URI = process.env.MONGO_URI;
