@@ -11,8 +11,15 @@
  * Optional hour filter (positional arg, must come right after the script name):
  *   node analyze-bracket-correlation.js hour1
  *
+ * This is CUMULATIVE from market open, not a single isolated hour: "hour1"
+ * means "using every tick from 8am up through the end of the 9-10am hour."
  * Market window is treated as 8am-6pm local, 10 one-hour buckets:
- *   hour0 = 8:00-8:59am, hour1 = 9:00-9:59am, ... hour9 = 5:00-5:59pm
+ *   hour0 = through 8:00-8:59am   (8am-9am only)
+ *   hour1 = through 9:00-9:59am   (8am-10am)
+ *   hour2 = through 10:00-10:59am (8am-11am)
+ *   hour3 = through 11:00-11:59am (8am-12pm)
+ *   ...
+ *   hour9 = through 5:00-5:59pm   (8am-6pm, the full day)
  * Bucketing is done off the `pacing_time` field (a local clock string like
  * "11:00 AM"), NOT off captured_at (which is UTC and doesn't track local
  * market hours consistently across cities).
@@ -54,13 +61,15 @@ if (hourArg) {
 }
 
 function bucketLabel(n) {
-  const startH = 8 + n;
+  // Cumulative window label: always starts at 8am, ends at the close of
+  // hour bucket n.
+  const endH = 8 + n + 1;
   const fmt = (h) => {
     const period = h >= 12 ? "PM" : "AM";
     const h12 = h % 12 === 0 ? 12 : h % 12;
     return `${h12}${period}`;
   };
-  return `${fmt(startH)}-${fmt(startH + 1)}`;
+  return `8AM-${fmt(endH)}`;
 }
 
 function normBracket(b) {
@@ -100,7 +109,9 @@ async function ticksByCityDateBracket(db, collName) {
   for (const doc of docs) {
     if (hourBucketFilter !== null) {
       const bucket = pacingTimeToBucket(doc.pacing_time);
-      if (bucket !== hourBucketFilter) continue;
+      // Cumulative: include everything from bucket 0 up through the
+      // requested bucket (inclusive), i.e. "8am through end of hourN".
+      if (bucket === null || bucket > hourBucketFilter) continue;
     }
     const key = `${doc.city}|${doc.local_date}`;
     if (!map.has(key)) map.set(key, new Map());
@@ -178,9 +189,11 @@ async function main() {
 
   if (hourBucketFilter !== null) {
     console.log(
-      `\nFiltering ticks to hour${hourBucketFilter} (${bucketLabel(hourBucketFilter)} local) only.\n` +
+      `\nFiltering to cumulative window hour0-hour${hourBucketFilter} (${bucketLabel(
+        hourBucketFilter
+      )} local) — every tick from market open through that hour.\n` +
         `Winning brackets still reflect the full-day outcome — this checks how predictive ` +
-        `THAT hour's leading bracket is of the eventual winner.`
+        `the leading bracket is by that point in the day, not just that one hour.`
     );
   }
 
@@ -302,7 +315,7 @@ async function main() {
 
   console.log("\n=== Summary ===\n");
   if (hourBucketFilter !== null) {
-    console.log(`Hour bucket: hour${hourBucketFilter} (${bucketLabel(hourBucketFilter)} local)`);
+    console.log(`Cumulative window: hour0-hour${hourBucketFilter} (${bucketLabel(hourBucketFilter)} local)`);
   }
   console.log(`Resolved city-days analyzed: ${rows.length}`);
   console.log(
