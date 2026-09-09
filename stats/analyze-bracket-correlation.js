@@ -8,6 +8,15 @@
  * Run with:
  *   MONGO_URI="..." node analyze-bracket-correlation.js
  *
+ * Optional hour filter (positional arg, must come right after the script name):
+ *   node analyze-bracket-correlation.js hour1
+ *
+ * Market window is treated as 8am-6pm local, 10 one-hour buckets:
+ *   hour0 = 8:00-8:59am, hour1 = 9:00-9:59am, ... hour9 = 5:00-5:59pm
+ * Bucketing is done off the `pacing_time` field (a local clock string like
+ * "11:00 AM"), NOT off captured_at (which is UTC and doesn't track local
+ * market hours consistently across cities).
+ *
  * Optional flags:
  *   --city=Beijing        only analyze one city
  *   --csv=out.csv         also dump the per-city-day rows to a CSV
@@ -22,43 +31,82 @@ if (!MONGO_URI) {
   process.exit(1);
 }
 
+const rawArgs = process.argv.slice(2);
+const positional = rawArgs.filter((a) => !a.startsWith("--"));
 const args = Object.fromEntries(
-  process.argv.slice(2).map((a) => {
-    const [k, v] = a.replace(/^--/, "").split("=");
-    return [k, v ?? true];
-  })
+  rawArgs
+    .filter((a) => a.startsWith("--"))
+    .map((a) => {
+      const [k, v] = a.replace(/^--/, "").split("=");
+      return [k, v ?? true];
+    })
 );
+
+// Parse an hourN positional arg into a 0-9 bucket index, or null if absent.
+let hourBucketFilter = null;
+const hourArg = positional.find((a) => /^hour\d+$/i.test(a));
+if (hourArg) {
+  hourBucketFilter = parseInt(hourArg.replace(/^hour/i, ""), 10);
+  if (hourBucketFilter < 0 || hourBucketFilter > 9) {
+    console.error(`Invalid hour bucket "${hourArg}" — valid range is hour0 through hour9.`);
+    process.exit(1);
+  }
+}
+
+function bucketLabel(n) {
+  const startH = 8 + n;
+  const fmt = (h) => {
+    const period = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}${period}`;
+  };
+  return `${fmt(startH)}-${fmt(startH + 1)}`;
+}
 
 function normBracket(b) {
   if (b === null || b === undefined) return null;
   return String(b).trim();
 }
 
-// Aggregate {city, local_date, bracket} -> tick count for one collection
+// Parse a pacing_time string like "9:25 AM" or "11:00 AM" into a 0-9 hour
+// bucket (8am-6pm local, one bucket per clock hour). Returns null if it
+// doesn't parse or falls outside the tracked window.
+function pacingTimeToBucket(pacingTime) {
+  if (!pacingTime) return null;
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(pacingTime.trim());
+  if (!m) return null;
+  let hour = parseInt(m[1], 10);
+  const meridiem = m[3].toUpperCase();
+  if (meridiem === "PM" && hour !== 12) hour += 12;
+  if (meridiem === "AM" && hour === 12) hour = 0;
+  if (hour < 8 || hour >= 18) return null; // outside 8am-6pm tracked window
+  return hour - 8;
+}
+
+// Aggregate {city, local_date, bracket} -> tick count for one collection,
+// optionally restricted to a single hour bucket (via pacing_time).
 async function ticksByCityDateBracket(db, collName) {
   const match = { bracket: { $ne: null, $exists: true } };
   if (args.city) match.city = args.city;
 
-  const rows = await db
+  // Fetch raw docs (not grouped in Mongo) since bucketing requires parsing
+  // the pacing_time string, which Mongo can't do cheaply in an aggregation.
+  const docs = await db
     .collection(collName)
-    .aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: { city: "$city", local_date: "$local_date", bracket: "$bracket" },
-          count: { $sum: 1 },
-        },
-      },
-    ])
+    .find(match, { projection: { city: 1, local_date: 1, bracket: 1, pacing_time: 1 } })
     .toArray();
 
   const map = new Map(); // key "city|date" -> Map(bracket -> count)
-  for (const r of rows) {
-    const key = `${r._id.city}|${r._id.local_date}`;
+  for (const doc of docs) {
+    if (hourBucketFilter !== null) {
+      const bucket = pacingTimeToBucket(doc.pacing_time);
+      if (bucket !== hourBucketFilter) continue;
+    }
+    const key = `${doc.city}|${doc.local_date}`;
     if (!map.has(key)) map.set(key, new Map());
     const bMap = map.get(key);
-    const bracket = normBracket(r._id.bracket);
-    bMap.set(bracket, (bMap.get(bracket) || 0) + r.count);
+    const bracket = normBracket(doc.bracket);
+    bMap.set(bracket, (bMap.get(bracket) || 0) + 1);
   }
   return map;
 }
@@ -127,6 +175,14 @@ async function main() {
   const client = new MongoClient(MONGO_URI);
   await client.connect();
   const db = client.db("weather");
+
+  if (hourBucketFilter !== null) {
+    console.log(
+      `\nFiltering ticks to hour${hourBucketFilter} (${bucketLabel(hourBucketFilter)} local) only.\n` +
+        `Winning brackets still reflect the full-day outcome — this checks how predictive ` +
+        `THAT hour's leading bracket is of the eventual winner.`
+    );
+  }
 
   const linearCounts = await ticksByCityDateBracket(db, "high-temp");
   const recCounts = await ticksByCityDateBracket(db, "reciprocal");
@@ -218,6 +274,9 @@ async function main() {
   }
 
   console.log("\n=== Summary ===\n");
+  if (hourBucketFilter !== null) {
+    console.log(`Hour bucket: hour${hourBucketFilter} (${bucketLabel(hourBucketFilter)} local)`);
+  }
   console.log(`Resolved city-days analyzed: ${rows.length}`);
   console.log(
     `Combined (linear+reciprocal) top-ticked bracket == winner: ${stats.combined.hits}/${stats.combined.total} (${pct(
