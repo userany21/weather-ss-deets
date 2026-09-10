@@ -1,10 +1,14 @@
 // lib/weather-transform.ts
 //
-// Direct TS port of the pandas logic in analyze_weather.py:
+// Tick → EnrichedTick pipeline.
 //   - paced_at: anchors the site's "pacing" clock string to local_date,
 //     rolling into the next day whenever the clock wraps past midnight.
-//   - make_bracket_labeler: buckets weighted_avg into the market's bracket
-//     grid, anchored on the day's winning bracket when known.
+//   - point_bracket: preferred source is the bracket field stored on each doc
+//     by the n8n workflow at insert time (exact Polymarket market title).
+//     For backfilled docs (bracket === null) the same rounding rule n8n uses
+//     is applied to weighted_avg — floor unless decimal ≥ 0.8, then ceil —
+//     so bucket assignment is consistent regardless of when winning_bracket_low
+//     / winning_bracket_high were backfilled.
 
 export interface Tick {
   captured_at: string | Date;
@@ -13,6 +17,8 @@ export interface Tick {
   city: string;
   weighted_avg: number | null;
   unit: "F" | "C";
+  /** Polymarket market groupItemTitle stored by n8n at insert time; null for backfilled docs. */
+  bracket: string | null;
   yes_price: number | null;
   winning_bracket: string | null;
   winning_bracket_low: number | null;
@@ -22,7 +28,7 @@ export interface Tick {
 export interface EnrichedTick extends Tick {
   /** ms since epoch, x-axis value for both charts */
   paced_at: number | null;
-  /** bracket string this weighted_avg fell into at this moment, e.g. "92-93" */
+  /** bracket string this weighted_avg fell into at this moment, e.g. "92-93°F" */
   point_bracket: string | null;
 }
 
@@ -65,27 +71,28 @@ function attachPacedAt(ticks: Tick[]): (Tick & { paced_at: number | null; _mins:
   });
 }
 
-function makeBracketLabeler(
-  winningLow: number | null,
-  winningHigh: number | null,
-  unit: "F" | "C"
-): (temp: number | null) => string | null {
-  let width: number;
-  let anchor: number;
+/**
+ * Fallback bracket label for backfilled docs (bracket === null).
+ *
+ * Replicates the exact rounding rule used by the n8n workflow's
+ * "Code in JavaScript2" and "Code in JavaScript6" nodes:
+ *   floor the value; if the decimal part is ≥ 0.8, round up instead.
+ * Then formats the resulting integer into a label that matches the style
+ * Polymarket uses for that unit:
+ *   Celsius  → single-degree  e.g. "26°C"
+ *   Fahrenheit → two-degree   e.g. "90-91°F"  (low always on an even boundary)
+ */
+function fallbackBracketLabel(weightedAvg: number, unit: "F" | "C"): string {
+  const floor = Math.floor(weightedAvg);
+  const decimal = weightedAvg - floor;
+  const rounded = decimal >= 0.8 ? floor + 1 : floor;
 
-  if (winningLow !== null && winningHigh !== null && Number.isFinite(winningLow) && Number.isFinite(winningHigh)) {
-    width = Math.trunc(winningHigh - winningLow) + 1;
-    anchor = Math.trunc(winningLow);
-  } else {
-    width = unit === "F" ? 2 : 1;
-    anchor = 0;
+  if (unit === "C") {
+    return `${rounded}°C`;
   }
-
-  return (temp) => {
-    if (temp === null || Number.isNaN(temp)) return null;
-    const low = anchor + width * Math.floor((temp - anchor) / width);
-    return width > 1 ? `${low}-${low + width - 1}` : `${low}`;
-  };
+  // Fahrenheit brackets are 2°F wide, anchored at even integers.
+  const low = Math.floor(rounded / 2) * 2;
+  return `${low}-${low + 1}°F`;
 }
 
 function modalUnit(ticks: Tick[]): "F" | "C" {
@@ -95,8 +102,14 @@ function modalUnit(ticks: Tick[]): "F" | "C" {
 }
 
 /**
- * Full pipeline equivalent to command_day() in analyze_weather.py, minus the
- * matplotlib rendering — returns enriched, sorted ticks ready for recharts.
+ * Full pipeline — returns enriched, sorted ticks ready for recharts.
+ *
+ * point_bracket priority per tick:
+ *   1. tick.bracket  — stored by n8n at insert time; exact Polymarket market
+ *      title, assigned with the same ≥0.8-decimal rule used at write time.
+ *   2. fallbackBracketLabel(weighted_avg, unit)  — for backfilled docs only
+ *      (bracket === null); applies the identical n8n rounding rule so the
+ *      bucket assignment is stable regardless of winning_bracket_low/high.
  */
 export function enrichDay(rawTicks: Tick[]): {
   ticks: EnrichedTick[];
@@ -126,12 +139,17 @@ export function enrichDay(rawTicks: Tick[]): {
   const winningBracket = (lastNonNull("winning_bracket") as string | null) ?? null;
   const unit = modalUnit(sorted);
 
-  const labelBracket = makeBracketLabeler(winningLow, winningHigh, unit);
-
-  const ticks: EnrichedTick[] = withPacedAt.map((t) => ({
-    ...t,
-    point_bracket: labelBracket(t.weighted_avg),
-  }));
+  const ticks: EnrichedTick[] = withPacedAt.map((t) => {
+    // Use the bracket stored at insert time when available; compute the
+    // equivalent n8n-rule label only for backfilled docs where it is absent.
+    let point_bracket: string | null = null;
+    if (t.bracket != null) {
+      point_bracket = t.bracket;
+    } else if (t.weighted_avg != null) {
+      point_bracket = fallbackBracketLabel(t.weighted_avg, t.unit);
+    }
+    return { ...t, point_bracket };
+  });
 
   return { ticks, winningLow, winningHigh, winningBracket, unit };
 }

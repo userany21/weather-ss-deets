@@ -1,0 +1,815 @@
+{
+    "nodes": [
+      {
+        "parameters": {
+          "resource": "message",
+          "operation": "getAll",
+          "guildId": {
+            "__rl": true,
+            "value": "1433589641956823133",
+            "mode": "list",
+            "cachedResultName": "fwx's server",
+            "cachedResultUrl": "https://discord.com/channels/1433589641956823133"
+          },
+          "channelId": {
+            "__rl": true,
+            "value": "1541701606079463514",
+            "mode": "list",
+            "cachedResultName": "weather-calc",
+            "cachedResultUrl": "https://discord.com/channels/1433589641956823133/1541701606079463514"
+          },
+          "limit": 1,
+          "options": {}
+        },
+        "type": "n8n-nodes-base.discord",
+        "typeVersion": 2,
+        "position": [
+          128,
+          0
+        ],
+        "id": "b482351a-2fb9-429b-bab2-1d297b68a66e",
+        "name": "Get many messages",
+        "webhookId": "58e8b50e-028f-42cb-baaa-6f2a1a005787",
+        "credentials": {
+          "discordBotApi": {
+            "id": "4dzIqPp5YHXycOv6",
+            "name": "kok"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "seconds",
+                "secondsInterval": 10
+              }
+            ]
+          }
+        },
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.3,
+        "position": [
+          -112,
+          0
+        ],
+        "id": "5df8887b-804e-444d-b708-cfa0a517e3a1",
+        "name": "Schedule Trigger"
+      },
+      {
+        "parameters": {
+          "jsCode": "const item = $input.first().json;\nconst text = item.content;\nlet data;\ntry { data = JSON.parse(text); }\ncatch (e) { throw new Error('Model returned invalid JSON: ' + text); }\n\nconst CITY_TIMEZONES = {\n  'los angeles': 'America/Los_Angeles',\n  'seattle': 'America/Los_Angeles',\n  'san francisco': 'America/Los_Angeles',\n  'nyc': 'America/New_York',\n  'new york': 'America/New_York',\n  'atlanta': 'America/New_York',\n  'miami': 'America/New_York',\n  'hong kong': 'Asia/Hong_Kong',\n  'beijing': 'Asia/Shanghai',\n  'shanghai': 'Asia/Shanghai',\n  'shenzhen': 'Asia/Shanghai',\n  'tokyo': 'Asia/Tokyo',\n  'seoul': 'Asia/Seoul',\n  'singapore': 'Asia/Singapore',\n  'amsterdam': 'Europe/Amsterdam',\n  'london': 'Europe/London',\n  'madrid': 'Europe/Madrid',\n  'milan': 'Europe/Rome',\n  'munich': 'Europe/Berlin',\n  'paris': 'Europe/Paris',\n};\n\nfunction localDateForCity(city) {\n  const tz = CITY_TIMEZONES[city.toLowerCase()];\n  if (!tz) throw new Error(`No timezone mapping for city: \"${city}\"`);\n  // en-CA locale formats as YYYY-MM-DD directly, no manual string surgery needed\n  return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());\n}\n\nfunction parsePace(pace) {\n  if (typeof pace === 'number') return pace;\n  if (typeof pace === 'string') {\n    const rangeMatch = pace.match(/(-?\\+?\\d+(\\.\\d+)?)\\s*to\\s*(-?\\+?\\d+(\\.\\d+)?)/i);\n    if (rangeMatch) {\n      const lo = parseFloat(rangeMatch[1]);\n      const hi = parseFloat(rangeMatch[3]);\n      return (lo + hi) / 2;\n    }\n    const single = parseFloat(pace);\n    if (!Number.isNaN(single)) return single;\n  }\n  throw new Error(`Could not parse pace value: ${JSON.stringify(pace)}`);\n}\n\nconst models = data.models;\nconst n = models.length;\nlet sumWeighted = 0, sumWeights = 0;\nfor (const m of models) {\n  const paceValue = parsePace(m.pace);\n  const adjustedHigh = m.high + paceValue;\n  const weight = (n + 1) - m.rank;\n  sumWeighted += adjustedHigh * weight;\n  sumWeights += weight;\n}\nconst weightedAvg = Math.round((sumWeighted / sumWeights) * 10) / 10;\n\nreturn [{\n  json: {\n    city: data.city,\n    pacing_time: data.pacing_time,\n    unit: data.unit,\n    weighted_avg: weightedAvg,\n    date: localDateForCity(data.city),\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          752,
+          0
+        ],
+        "id": "afee7b7c-17f9-4736-8e7a-9ce672b7da40",
+        "name": "Code in JavaScript"
+      },
+      {
+        "parameters": {
+          "operation": "get",
+          "dataTableId": {
+            "__rl": true,
+            "value": "PqasghYlldcd5NqM",
+            "mode": "list",
+            "cachedResultName": "weather-weightavg-clob",
+            "cachedResultUrl": "/projects/pDtUg56X8NPZeT3T/datatables/PqasghYlldcd5NqM"
+          },
+          "matchType": "allConditions",
+          "filters": {
+            "conditions": [
+              {
+                "keyName": "city",
+                "keyValue": "={{ $json.city }}"
+              },
+              {
+                "keyName": "date",
+                "keyValue": "={{ $json.date }}"
+              }
+            ]
+          }
+        },
+        "type": "n8n-nodes-base.dataTable",
+        "typeVersion": 1,
+        "position": [
+          1056,
+          0
+        ],
+        "id": "3fd852dd-3882-4f2f-ad3c-de65ceccee81",
+        "name": "Get row(s)",
+        "alwaysOutputData": true
+      },
+      {
+        "parameters": {
+          "jsCode": "const calc = $('Code in JavaScript').item.json;\nconst rows = $('Get row(s)').all();\n\nconst existing = rows[0]?.json?.history ?? null;\nconst timeFormatted = calc.pacing_time.toLowerCase().replace(' ', '');\nconst newEntry = `${calc.weighted_avg}${calc.unit} (${timeFormatted})`;\n\nlet history;\nif (!existing) {\n  history = newEntry;\n} else {\n  // case-insensitive match for an entry at this same pacing time, with or without a price already appended\n  const entryRegex = new RegExp(`[\\\\d.]+${calc.unit}\\\\s*\\\\(${timeFormatted}[^)]*\\\\)`, 'i');\n  if (entryRegex.test(existing)) {\n    history = existing.replace(entryRegex, newEntry); // overwrite that slot, don't duplicate\n  } else {\n    history = `${existing} -> ${newEntry}`; // genuinely new time, append\n  }\n}\n\nreturn [{\n  json: {\n    city: calc.city,\n    date: calc.date,\n    history,\n    unit: calc.unit,\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1264,
+          0
+        ],
+        "id": "28e447b6-60b7-4304-ac15-9f1663c95e3e",
+        "name": "Code in JavaScript1"
+      },
+      {
+        "parameters": {
+          "operation": "upsert",
+          "dataTableId": {
+            "__rl": true,
+            "value": "PqasghYlldcd5NqM",
+            "mode": "list",
+            "cachedResultName": "weather-weightavg-clob",
+            "cachedResultUrl": "/projects/pDtUg56X8NPZeT3T/datatables/PqasghYlldcd5NqM"
+          },
+          "matchType": "allConditions",
+          "filters": {
+            "conditions": [
+              {
+                "keyName": "city",
+                "keyValue": "={{ $json.city }}"
+              },
+              {
+                "keyName": "date",
+                "keyValue": "={{ $json.date }}"
+              }
+            ]
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "city": "={{ $json.city }}",
+              "date": "={{ $json.date }}",
+              "history": "={{ $json.history }}",
+              "unit": "={{ $json.unit }}"
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "city",
+                "displayName": "city",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              },
+              {
+                "id": "date",
+                "displayName": "date",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              },
+              {
+                "id": "history",
+                "displayName": "history",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              },
+              {
+                "id": "unit",
+                "displayName": "unit",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": false
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.dataTable",
+        "typeVersion": 1,
+        "position": [
+          1472,
+          0
+        ],
+        "id": "1fca776e-bd0f-489d-9cb9-db836a04e5ed",
+        "name": "Upsert row(s)"
+      },
+      {
+        "parameters": {
+          "jsCode": "const calc = $('Code in JavaScript').item.json;\n\nconst citySlug = calc.city.toLowerCase().replace(/\\s+/g, '-');\n\nconst [year, month, day] = calc.date.split('-');\nconst monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];\nconst monthName = monthNames[parseInt(month, 10) - 1];\nconst dayNum = parseInt(day, 10);\n\nconst slug = `highest-temperature-in-${citySlug}-on-${monthName}-${dayNum}-${year}`;\n\nreturn [{ json: { ...calc, slug } }];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1680,
+          0
+        ],
+        "id": "d3b99bbc-9f2d-4dcb-ab1b-4167738d704c",
+        "name": "build event slug"
+      },
+      {
+        "parameters": {
+          "url": "=https://gamma-api.polymarket.com/events/slug/{{ $json.slug }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.3,
+        "position": [
+          1888,
+          0
+        ],
+        "id": "e7879031-a383-4d32-8875-5123ac5bb60d",
+        "name": "HTTP Request"
+      },
+      {
+        "parameters": {
+          "jsCode": "const item = $input.first().json;\nconst event = Array.isArray(item) ? item[0] : item;\nconst calc = $('build event slug').item.json;\nconst weightedAvg = calc.weighted_avg;\nconst floor = Math.floor(weightedAvg);\nconst decimal = weightedAvg - floor;\nconst rounded = decimal >= 0.8 ? floor + 1 : floor;\n\n// threshold below which a \"Yes\" price is considered dead/invalid (temp has moved past this bracket)\nconst INVALID_PRICE_THRESHOLD = 0.01; // 1 cent\n\n// parses a bracket title into a normalized shape:\n// { type: 'below' | 'above' | 'range' | 'exact', low, high } — low/high used for matching + sorting\nfunction parseBracket(market) {\n  const title = market.groupItemTitle;\n\n  if (title.includes('or below')) {\n    const num = parseInt(title.match(/-?\\d+/)[0], 10);\n    return { type: 'below', low: -Infinity, high: num };\n  }\n  if (title.includes('or higher')) {\n    const num = parseInt(title.match(/-?\\d+/)[0], 10);\n    return { type: 'above', low: num, high: Infinity };\n  }\n\n  // ranged bracket, e.g. \"68-69°F\"\n  const rangeMatch = title.match(/(\\d+)\\s*-\\s*(\\d+)/);\n  if (rangeMatch) {\n    const low = parseInt(rangeMatch[1], 10);\n    const high = parseInt(rangeMatch[2], 10);\n    return { type: 'range', low, high };\n  }\n\n  // single-number bracket, e.g. \"30°C\"\n  const num = parseInt(title.match(/-?\\d+/)[0], 10);\n  return { type: 'exact', low: num, high: num };\n}\n\nfunction bracketMatches(bracket, value) {\n  switch (bracket.type) {\n    case 'below': return value <= bracket.high;\n    case 'above': return value >= bracket.low;\n    case 'range': return value >= bracket.low && value <= bracket.high;\n    case 'exact': return value === bracket.low;\n  }\n}\n\nfunction getYesPrice(market) {\n  const clobTokenIds = JSON.parse(market.clobTokenIds);\n  const outcomes = JSON.parse(market.outcomes);\n  const outcomePrices = JSON.parse(market.outcomePrices);\n  const yesIndex = outcomes.indexOf('Yes');\n  if (yesIndex === -1) throw new Error(`No \"Yes\" outcome found in market: ${market.question}`);\n  return {\n    yesPrice: parseFloat(outcomePrices[yesIndex]),\n    yesTokenId: clobTokenIds[yesIndex],\n  };\n}\n\nlet matched = null;\nfor (const market of event.markets) {\n  const bracket = parseBracket(market);\n  if (bracketMatches(bracket, rounded)) { matched = market; break; }\n}\nif (!matched) throw new Error(`No bracket matched ${weightedAvg} (rounded ${rounded}) in ${event.title}`);\n\nlet { yesPrice, yesTokenId } = getYesPrice(matched);\nlet bumped = false;\n\n// if the matched bracket's price is dead, the real temp has moved past it —\n// walk up to the next higher bracket(s) until we find a live price\nif (yesPrice < INVALID_PRICE_THRESHOLD) {\n  const sorted = [...event.markets].sort((a, b) => parseBracket(a).low - parseBracket(b).low);\n  const matchedLow = parseBracket(matched).low;\n  const startIdx = sorted.findIndex(m => m.groupItemTitle === matched.groupItemTitle);\n\n  for (let i = startIdx + 1; i < sorted.length; i++) {\n    const candidate = sorted[i];\n    const { yesPrice: candPrice, yesTokenId: candTokenId } = getYesPrice(candidate);\n    if (candPrice >= INVALID_PRICE_THRESHOLD) {\n      matched = candidate;\n      yesPrice = candPrice;\n      yesTokenId = candTokenId;\n      bumped = true;\n      break;\n    }\n  }\n}\n\n// --- patch the saved history entry for this pacing_time with the price ---\nconst savedRow = $('Upsert row(s)').item.json;\nconst timeFormatted = calc.pacing_time.toLowerCase().replace(' ', '');\nconst priceTag = `${timeFormatted}, ${Math.round(yesPrice * 100)}¢${bumped ? '↑' : ''}`;\nconst bareRegex = new RegExp(`\\\\(${timeFormatted}\\\\)`, 'i');\nconst updatedHistory = (savedRow.history ?? '').replace(bareRegex, `(${priceTag})`);\n\nreturn [{\n  json: {\n    city: calc.city,\n    date: calc.date,\n    unit: calc.unit,\n    history: updatedHistory,\n    bracket: matched.groupItemTitle,\n    yes_token_id: yesTokenId,\n    yes_price: yesPrice,\n    yes_price_cents: Math.round(yesPrice * 100),\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2096,
+          0
+        ],
+        "id": "a35da137-d06c-4794-859e-c77cbdf7dfde",
+        "name": "Code in JavaScript2"
+      },
+      {
+        "parameters": {
+          "operation": "upsert",
+          "dataTableId": {
+            "__rl": true,
+            "value": "PqasghYlldcd5NqM",
+            "mode": "list",
+            "cachedResultName": "weather-weightavg-clob",
+            "cachedResultUrl": "/projects/pDtUg56X8NPZeT3T/datatables/PqasghYlldcd5NqM"
+          },
+          "matchType": "allConditions",
+          "filters": {
+            "conditions": [
+              {
+                "keyName": "city",
+                "keyValue": "={{ $json.city }}"
+              },
+              {
+                "keyName": "date",
+                "keyValue": "={{ $json.date }}"
+              }
+            ]
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "history": "={{ $json.history }}"
+            },
+            "matchingColumns": [],
+            "schema": [
+              {
+                "id": "city",
+                "displayName": "city",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              },
+              {
+                "id": "date",
+                "displayName": "date",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              },
+              {
+                "id": "history",
+                "displayName": "history",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              },
+              {
+                "id": "unit",
+                "displayName": "unit",
+                "required": false,
+                "defaultMatch": false,
+                "display": true,
+                "type": "string",
+                "readOnly": false,
+                "removed": false
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": false
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.dataTable",
+        "typeVersion": 1,
+        "position": [
+          2304,
+          0
+        ],
+        "id": "5d3e067d-23b3-4674-8dd9-a04a39b3b721",
+        "name": "Upsert row(s)1"
+      },
+      {
+        "parameters": {
+          "jsCode": "const calc = $('Code in JavaScript2').item.json; // has city, date, history, bracket, yes_price_cents\n\nif (calc.yes_price_cents >= 99.95) {\n  return [];\n}\n\nconst historyStr = calc.history;\nconst entries = [];\nconst regex = /([\\d.]+)([CF])\\s*\\(([^,)]+)(?:,\\s*(\\d+)¢)?\\)/g;\nlet match;\nwhile ((match = regex.exec(historyStr)) !== null) {\n  entries.push({\n    value: parseFloat(match[1]),\n    unit: match[2],\n    time: match[3].trim(),\n    price: match[4] ? `${match[4]}¢` : '—',\n  });\n}\nconst lines = entries.map((e, i) => {\n  let arrow = '  ';\n  if (i > 0) {\n    if (e.value > entries[i - 1].value) arrow = '↑ ';\n    else if (e.value < entries[i - 1].value) arrow = '↓ ';\n    else arrow = '→ ';\n  }\n  return `${e.time.padEnd(8)}${(e.value + e.unit).padEnd(7)}${arrow}${e.price}`;\n});\nconst cityName = calc.city.charAt(0).toUpperCase() + calc.city.slice(1);\nconst message = `**${cityName} — ${calc.date}**\\nBracket: ${calc.bracket} (currently ${calc.yes_price_cents}¢)\\n\\`\\`\\`\\n${lines.join('\\n')}\\n\\`\\`\\``;\nreturn [{ json: { message } }];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2512,
+          0
+        ],
+        "id": "26cce85b-8c46-445a-bcc7-0c5838e3809a",
+        "name": "Code in JavaScript3"
+      },
+      {
+        "parameters": {
+          "resource": "message",
+          "guildId": {
+            "__rl": true,
+            "value": "1433589641956823133",
+            "mode": "list",
+            "cachedResultName": "fwx's server",
+            "cachedResultUrl": "https://discord.com/channels/1433589641956823133"
+          },
+          "channelId": {
+            "__rl": true,
+            "value": "1542027610177937518",
+            "mode": "list",
+            "cachedResultName": "linear",
+            "cachedResultUrl": "https://discord.com/channels/1433589641956823133/1542027610177937518"
+          },
+          "content": "={{ $json.message }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.discord",
+        "typeVersion": 2,
+        "position": [
+          2720,
+          0
+        ],
+        "id": "3783224f-03d3-455c-bd0a-81b4e5017957",
+        "name": "Send a message",
+        "webhookId": "119524cb-ee82-4d1c-ad8a-9503cdaff393",
+        "credentials": {
+          "discordBotApi": {
+            "id": "4dzIqPp5YHXycOv6",
+            "name": "kok"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const msg = $input.first().json;\nconst staticData = $getWorkflowStaticData('node');\nconst fingerprint = `${msg.id}:${msg.editedTimestamp || msg.timestamp}`;\n\nif (staticData.lastFingerprint === fingerprint) {\n  return []; // nothing changed since last poll, skip vision + everything else\n}\nstaticData.lastFingerprint = fingerprint;\nreturn [{ json: msg }];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          336,
+          0
+        ],
+        "id": "d730d602-937b-46d9-b237-c56a950df238",
+        "name": "Code in JavaScript4"
+      },
+      {
+        "parameters": {
+          "jsCode": "const calc = $('Code in JavaScript2').item.json;\nconst pacingTime = $('Code in JavaScript').item.json.pacing_time;\n\nreturn [{\n  json: {\n    city: calc.city,\n    local_date: calc.date,\n    pacing_time: pacingTime,\n    unit: calc.unit,\n    weighted_avg: $('build event slug').first().json.weighted_avg,\n    bracket: calc.bracket,\n    yes_price: calc.yes_price,\n    yes_price_cents: calc.yes_price_cents,\n    captured_at: new Date().toISOString(),\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2336,
+          240
+        ],
+        "id": "31d9f623-c4c7-462b-8c77-36ea83d898ed",
+        "name": "Code in JavaScript5"
+      },
+      {
+        "parameters": {
+          "operation": "insert",
+          "collection": "high-temp",
+          "fields": "=city,local_date,pacing_time,unit,weighted_avg, bracket,yes_price,yes_price_cents,captured_at",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.mongoDb",
+        "typeVersion": 1.2,
+        "position": [
+          2544,
+          240
+        ],
+        "id": "1ea7ad51-cb8f-4645-8335-05ede5ba84e0",
+        "name": "Insert documents",
+        "credentials": {
+          "mongoDb": {
+            "id": "ZbvfO96WrOgIQdHz",
+            "name": "MongoDB account 4"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const item = $input.first().json;\nconst text = item.content;\nlet data;\ntry { data = JSON.parse(text); }\ncatch (e) { throw new Error('Model returned invalid JSON: ' + text); }\n\nconst CITY_TIMEZONES = {\n  'los angeles': 'America/Los_Angeles', 'seattle': 'America/Los_Angeles', 'san francisco': 'America/Los_Angeles',\n  'nyc': 'America/New_York', 'new york': 'America/New_York', 'atlanta': 'America/New_York', 'miami': 'America/New_York',\n  'hong kong': 'Asia/Hong_Kong', 'beijing': 'Asia/Shanghai', 'shanghai': 'Asia/Shanghai', 'shenzhen': 'Asia/Shanghai',\n  'tokyo': 'Asia/Tokyo', 'seoul': 'Asia/Seoul', 'singapore': 'Asia/Singapore',\n  'amsterdam': 'Europe/Amsterdam', 'london': 'Europe/London', 'madrid': 'Europe/Madrid', 'milan': 'Europe/Rome',\n  'munich': 'Europe/Berlin', 'paris': 'Europe/Paris',\n};\n\nfunction localDateForCity(city) {\n  const tz = CITY_TIMEZONES[city.toLowerCase()];\n  if (!tz) throw new Error(`No timezone mapping for city: \"${city}\"`);\n  return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());\n}\n\nfunction parsePace(pace) {\n  if (typeof pace === 'number') return pace;\n  if (typeof pace === 'string') {\n    const rangeMatch = pace.match(/(-?\\+?\\d+(\\.\\d+)?)\\s*to\\s*(-?\\+?\\d+(\\.\\d+)?)/i);\n    if (rangeMatch) {\n      const lo = parseFloat(rangeMatch[1]);\n      const hi = parseFloat(rangeMatch[3]);\n      return (lo + hi) / 2;\n    }\n    const single = parseFloat(pace);\n    if (!Number.isNaN(single)) return single;\n  }\n  throw new Error(`Could not parse pace value: ${JSON.stringify(pace)}`);\n}\n\nconst PACE_DAMPING = 0.65;\nconst TRIM_EACH_SIDE = 1;\n\nconst models = data.models;\n\nconst adjusted = models.map(m => ({\n  rank: m.rank,\n  adjustedHigh: m.high + (parsePace(m.pace) * PACE_DAMPING),\n}));\n\nlet pool = adjusted;\nif (adjusted.length - (TRIM_EACH_SIDE * 2) >= 3) {\n  const sorted = [...adjusted].sort((a, b) => a.adjustedHigh - b.adjustedHigh);\n  pool = sorted.slice(TRIM_EACH_SIDE, sorted.length - TRIM_EACH_SIDE);\n}\n\nlet sumWeighted = 0, sumWeights = 0;\nfor (const m of pool) {\n  const weight = 1 / m.rank;\n  sumWeighted += m.adjustedHigh * weight;\n  sumWeights += weight;\n}\nconst weightedAvg = Math.round((sumWeighted / sumWeights) * 10) / 10;\nconst localDate = localDateForCity(data.city);\n\n// --- slug building (same logic as \"build event slug\") ---\nconst citySlug = data.city.toLowerCase().replace(/\\s+/g, '-');\nconst [year, month, day] = localDate.split('-');\nconst monthNames = ['january','february','march','april','may','june','july','august','september','october','november','december'];\nconst monthName = monthNames[parseInt(month, 10) - 1];\nconst dayNum = parseInt(day, 10);\nconst slug = `highest-temperature-in-${citySlug}-on-${monthName}-${dayNum}-${year}`;\n\nreturn [{\n  json: {\n    city: data.city,\n    pacing_time: data.pacing_time,\n    unit: data.unit,\n    weighted_avg: weightedAvg,\n    method: 'reciprocal_damped065_trimmed1',\n    date: localDate,\n    slug,\n    captured_at: new Date().toISOString(),\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          608,
+          -256
+        ],
+        "id": "ff3f0e24-e8a9-41b1-9001-8e4aef99f38e",
+        "name": "Code in JavaScript (Reciprocal)"
+      },
+      {
+        "parameters": {
+          "url": "=https://gamma-api.polymarket.com/events/slug/{{ $json.slug }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.3,
+        "position": [
+          1008,
+          -768
+        ],
+        "id": "fb36fe2d-8eb1-4033-89f3-e47cd6f576ee",
+        "name": "HTTP Request1"
+      },
+      {
+        "parameters": {
+          "jsCode": "const item = $input.first().json;\nconst event = Array.isArray(item) ? item[0] : item;\nconst calc = $('Code in JavaScript (Reciprocal)').item.json; // pulls weighted_avg from the OTHER method's calc\nconst weightedAvg = calc.weighted_avg;\nconst floor = Math.floor(weightedAvg);\nconst decimal = weightedAvg - floor;\nconst rounded = decimal >= 0.8 ? floor + 1 : floor;\n\nconst INVALID_PRICE_THRESHOLD = 0.01;\n\nfunction parseBracket(market) {\n  const title = market.groupItemTitle;\n  if (title.includes('or below')) {\n    const num = parseInt(title.match(/-?\\d+/)[0], 10);\n    return { type: 'below', low: -Infinity, high: num };\n  }\n  if (title.includes('or higher')) {\n    const num = parseInt(title.match(/-?\\d+/)[0], 10);\n    return { type: 'above', low: num, high: Infinity };\n  }\n  const rangeMatch = title.match(/(\\d+)\\s*-\\s*(\\d+)/);\n  if (rangeMatch) return { type: 'range', low: parseInt(rangeMatch[1], 10), high: parseInt(rangeMatch[2], 10) };\n  const num = parseInt(title.match(/-?\\d+/)[0], 10);\n  return { type: 'exact', low: num, high: num };\n}\n\nfunction bracketMatches(bracket, value) {\n  switch (bracket.type) {\n    case 'below': return value <= bracket.high;\n    case 'above': return value >= bracket.low;\n    case 'range': return value >= bracket.low && value <= bracket.high;\n    case 'exact': return value === bracket.low;\n  }\n}\n\nfunction getYesPrice(market) {\n  const clobTokenIds = JSON.parse(market.clobTokenIds);\n  const outcomes = JSON.parse(market.outcomes);\n  const outcomePrices = JSON.parse(market.outcomePrices);\n  const yesIndex = outcomes.indexOf('Yes');\n  if (yesIndex === -1) throw new Error(`No \"Yes\" outcome found in market: ${market.question}`);\n  return { yesPrice: parseFloat(outcomePrices[yesIndex]), yesTokenId: clobTokenIds[yesIndex] };\n}\n\nlet matched = null;\nfor (const market of event.markets) {\n  const bracket = parseBracket(market);\n  if (bracketMatches(bracket, rounded)) { matched = market; break; }\n}\nif (!matched) throw new Error(`No bracket matched ${weightedAvg} (rounded ${rounded}) in ${event.title}`);\n\nlet { yesPrice, yesTokenId } = getYesPrice(matched);\nlet bumped = false;\n\nif (yesPrice < INVALID_PRICE_THRESHOLD) {\n  const sorted = [...event.markets].sort((a, b) => parseBracket(a).low - parseBracket(b).low);\n  const startIdx = sorted.findIndex(m => m.groupItemTitle === matched.groupItemTitle);\n  for (let i = startIdx + 1; i < sorted.length; i++) {\n    const candidate = sorted[i];\n    const { yesPrice: candPrice, yesTokenId: candTokenId } = getYesPrice(candidate);\n    if (candPrice >= INVALID_PRICE_THRESHOLD) {\n      matched = candidate; yesPrice = candPrice; yesTokenId = candTokenId; bumped = true;\n      break;\n    }\n  }\n}\n\nreturn [{\n  json: {\n    city: calc.city,\n    date: calc.date,\n    pacing_time: calc.pacing_time,\n    unit: calc.unit,\n    method: calc.method,\n    weighted_avg: weightedAvg,\n    bracket: matched.groupItemTitle,\n    yes_token_id: yesTokenId,\n    yes_price: yesPrice,\n    yes_price_cents: Math.round(yesPrice * 100),\n    bumped_bracket: bumped,\n    captured_at: new Date().toISOString(),\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1216,
+          -768
+        ],
+        "id": "d188d770-ea58-4943-87e2-bca7e141811a",
+        "name": "Code in JavaScript6"
+      },
+      {
+        "parameters": {
+          "jsCode": "const calc = $input.first().json;\n\nreturn [{\n  json: {\n    city: calc.city,\n    local_date: calc.date,\n    pacing_time: calc.pacing_time,\n    unit: calc.unit,\n    method: calc.method,\n    weighted_avg: calc.weighted_avg,\n    bracket: calc.bracket,\n    yes_price: calc.yes_price,\n    yes_price_cents: calc.yes_price_cents,\n    captured_at: new Date().toISOString(),\n  }\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1456,
+          -528
+        ],
+        "id": "cdfee346-fd5c-40b6-868f-2b5acf9dee37",
+        "name": "Code in JavaScript7"
+      },
+      {
+        "parameters": {
+          "operation": "insert",
+          "collection": "reciprocal",
+          "fields": "=city,local_date,pacing_time,unit,weighted_avg, bracket,yes_price,yes_price_cents,captured_at",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.mongoDb",
+        "typeVersion": 1.2,
+        "position": [
+          1664,
+          -528
+        ],
+        "id": "52da1eb9-1cc5-4d9f-bd85-5127456b591c",
+        "name": "Insert documents1",
+        "credentials": {
+          "mongoDb": {
+            "id": "ZbvfO96WrOgIQdHz",
+            "name": "MongoDB account 4"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const items = $input.all().map(i => i.json);\nif (items.length === 0) return [];\n\n// belt-and-suspenders sort in case Mongo's sort didn't apply exactly as expected\nitems.sort((a, b) => new Date(a.captured_at) - new Date(b.captured_at));\n\nconst latest = items[items.length - 1];\n\nif (latest.yes_price_cents >= 99.95) {\n  return [];\n}\n\nconst lines = items.map((e, i) => {\n  const reading = `${e.pacing_time}`.padEnd(8) + `${e.weighted_avg}${e.unit}`.padEnd(7);\n  let arrow = '  ';\n  if (i > 0) {\n    if (e.weighted_avg > items[i - 1].weighted_avg) arrow = '↑ ';\n    else if (e.weighted_avg < items[i - 1].weighted_avg) arrow = '↓ ';\n    else arrow = '→ ';\n  }\n  const price = e.yes_price_cents != null ? `${e.yes_price_cents}¢` : '—';\n  return `${reading}${arrow}${price}`;\n});\n\nconst cityName = latest.city.charAt(0).toUpperCase() + latest.city.slice(1);\nconst message = `**${cityName} — ${latest.local_date}** (reciprocal)\\nBracket: ${latest.bracket} (currently ${latest.yes_price_cents}¢)\\n\\`\\`\\`\\n${lines.join('\\n')}\\n\\`\\`\\``;\n\nreturn [{ json: { message } }];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2144,
+          -528
+        ],
+        "id": "60ce58f8-5476-46d0-9942-fa82d7f31662",
+        "name": "Code in JavaScript8"
+      },
+      {
+        "parameters": {
+          "collection": "reciprocal",
+          "options": {
+            "sort": "{\"captured_at\": 1}"
+          },
+          "query": "={\"city\": \"{{ $json.city }}\", \"local_date\": \"{{ $json.local_date }}\"} "
+        },
+        "type": "n8n-nodes-base.mongoDb",
+        "typeVersion": 1.2,
+        "position": [
+          1872,
+          -528
+        ],
+        "id": "01b161c6-2522-460e-b16b-6e814af51817",
+        "name": "Find documents",
+        "credentials": {
+          "mongoDb": {
+            "id": "ZbvfO96WrOgIQdHz",
+            "name": "MongoDB account 4"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "resource": "message",
+          "guildId": {
+            "__rl": true,
+            "value": "1433589641956823133",
+            "mode": "list",
+            "cachedResultName": "fwx's server",
+            "cachedResultUrl": "https://discord.com/channels/1433589641956823133"
+          },
+          "channelId": {
+            "__rl": true,
+            "value": "1546060879894945802",
+            "mode": "list",
+            "cachedResultName": "reciprocal",
+            "cachedResultUrl": "https://discord.com/channels/1433589641956823133/1546060879894945802"
+          },
+          "content": "={{ $json.message }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.discord",
+        "typeVersion": 2,
+        "position": [
+          2352,
+          -528
+        ],
+        "id": "4aed6e7e-81dd-427e-9789-fdff0debc339",
+        "name": "Send a message1",
+        "webhookId": "385d2cb1-f6e0-4afc-9c2e-6ab61425ef7e",
+        "credentials": {
+          "discordBotApi": {
+            "id": "4dzIqPp5YHXycOv6",
+            "name": "kok"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Get many messages": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript4",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Schedule Trigger": {
+        "main": [
+          [
+            {
+              "node": "Get many messages",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript": {
+        "main": [
+          [
+            {
+              "node": "Get row(s)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Get row(s)": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript1": {
+        "main": [
+          [
+            {
+              "node": "Upsert row(s)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Upsert row(s)": {
+        "main": [
+          [
+            {
+              "node": "build event slug",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "build event slug": {
+        "main": [
+          [
+            {
+              "node": "HTTP Request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "HTTP Request": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript2",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript2": {
+        "main": [
+          [
+            {
+              "node": "Upsert row(s)1",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Code in JavaScript5",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Upsert row(s)1": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript3",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript3": {
+        "main": [
+          [
+            {
+              "node": "Send a message",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript4": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Code in JavaScript (Reciprocal)",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript5": {
+        "main": [
+          [
+            {
+              "node": "Insert documents",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript (Reciprocal)": {
+        "main": [
+          [
+            {
+              "node": "HTTP Request1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "HTTP Request1": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript6",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript6": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript7",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript7": {
+        "main": [
+          [
+            {
+              "node": "Insert documents1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Insert documents1": {
+        "main": [
+          [
+            {
+              "node": "Find documents",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Code in JavaScript8": {
+        "main": [
+          [
+            {
+              "node": "Send a message1",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Find documents": {
+        "main": [
+          [
+            {
+              "node": "Code in JavaScript8",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "pinData": {},
+    "meta": {
+      "templateCredsSetupCompleted": true,
+      "instanceId": "029565f24d9a5736639e540318c8201334aa04eef82b1540511d9fa099b3e526"
+    }
+  }
