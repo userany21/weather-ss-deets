@@ -272,6 +272,20 @@ function pct(n, d) {
   return d === 0 ? "n/a" : `${((n / d) * 100).toFixed(1)}%`;
 }
 
+// If you bought this bracket at its first-tick price (entry.priceCents) and
+// held to resolution: win pays out 100¢, so profit = 100 - price; a loss
+// forfeits the stake, so profit = -price. Only defined for resolved
+// city-days with a known first-tick price.
+function edgeCents(e) {
+  if (!e.resolved || e.priceCents === null || e.priceCents === undefined) return null;
+  return e.isWinningBracket ? 100 - e.priceCents : -e.priceCents;
+}
+
+function fmtCents(c) {
+  const sign = c >= 0 ? "+" : "";
+  return `${sign}${c.toFixed(1)}¢`;
+}
+
 // Bucket a 0-100 cents value into a width-wide bucket, returns { index, label }.
 function priceBucket(cents, width) {
   const numBuckets = 100 / width;
@@ -281,18 +295,23 @@ function priceBucket(cents, width) {
 
 function printPriceTable(methodLabel, entries, width) {
   const resolvedWithPrice = entries.filter((e) => e.resolved && e.priceCents !== null);
-  const buckets = new Map(); // index -> { count, winners }
+  const buckets = new Map(); // index -> { count, winners, edgeSum }
   for (const e of resolvedWithPrice) {
     const { index, label } = priceBucket(e.priceCents, width);
-    if (!buckets.has(index)) buckets.set(index, { label, count: 0, winners: 0 });
+    if (!buckets.has(index)) buckets.set(index, { label, count: 0, winners: 0, edgeSum: 0 });
     const b = buckets.get(index);
     b.count++;
     if (e.isWinningBracket) b.winners++;
+    b.edgeSum += edgeCents(e);
   }
   console.log(
-    `\n[${methodLabel}] First-tick price -> win rate (${width}-cent buckets, n=${resolvedWithPrice.length})`
+    `\n[${methodLabel}] First-tick price -> win rate & avg edge (${width}-cent buckets, n=${resolvedWithPrice.length})`
   );
-  console.log(`  ${"price_range".padEnd(14)}${"count".padEnd(8)}${"winners".padEnd(10)}win_rate`);
+  console.log(
+    `  ${"price_range".padEnd(14)}${"count".padEnd(8)}${"winners".padEnd(10)}${"win_rate".padEnd(
+      10
+    )}avg_edge (if you bought at entry price, per $1 bet)`
+  );
   const sortedIdx = [...buckets.keys()].sort((a, b) => a - b);
   for (const idx of sortedIdx) {
     const b = buckets.get(idx);
@@ -300,31 +319,42 @@ function printPriceTable(methodLabel, entries, width) {
       `  ${b.label.padEnd(14)}${String(b.count).padEnd(8)}${String(b.winners).padEnd(10)}${pct(
         b.winners,
         b.count
-      )}`
+      ).padEnd(10)}${fmtCents(b.edgeSum / b.count)}`
     );
   }
 }
 
 function printHourTable(methodLabel, entries) {
   const withHour = entries.filter((e) => e.hourBucket !== null);
-  const buckets = new Map(); // hourBucket -> { count, topTicked }
+  const buckets = new Map(); // hourBucket -> { count, topTicked, edgeSum, edgeN }
   for (const e of withHour) {
-    if (!buckets.has(e.hourBucket)) buckets.set(e.hourBucket, { count: 0, topTicked: 0 });
+    if (!buckets.has(e.hourBucket))
+      buckets.set(e.hourBucket, { count: 0, topTicked: 0, edgeSum: 0, edgeN: 0 });
     const b = buckets.get(e.hourBucket);
     b.count++;
     if (e.isTopTickedBracket) b.topTicked++;
+    const edge = edgeCents(e);
+    if (edge !== null) {
+      b.edgeSum += edge;
+      b.edgeN++;
+    }
   }
   console.log(
-    `\n[${methodLabel}] First-tick hour -> became day's top-ticked bracket (n=${withHour.length})`
+    `\n[${methodLabel}] First-tick hour -> became day's top-ticked bracket, and avg edge if bought then (n=${withHour.length})`
   );
-  console.log(`  ${"hour".padEnd(10)}${"count".padEnd(8)}${"top_ticked".padEnd(12)}rate`);
+  console.log(
+    `  ${"hour".padEnd(10)}${"count".padEnd(8)}${"top_ticked".padEnd(12)}${"rate".padEnd(
+      10
+    )}avg_edge (n resolved)`
+  );
   for (let h = 0; h <= 9; h++) {
     const b = buckets.get(h);
     if (!b) continue;
+    const edgeStr = b.edgeN > 0 ? `${fmtCents(b.edgeSum / b.edgeN)} (n=${b.edgeN})` : "n/a";
     console.log(
       `  ${("hour" + h).padEnd(10)}${String(b.count).padEnd(8)}${String(b.topTicked).padEnd(
         12
-      )}${pct(b.topTicked, b.count)}`
+      )}${pct(b.topTicked, b.count).padEnd(10)}${edgeStr}`
     );
   }
 }
