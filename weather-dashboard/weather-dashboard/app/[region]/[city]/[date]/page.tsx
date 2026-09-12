@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import TempChart from "@/components/TempChart";
@@ -8,6 +9,11 @@ import type { EnrichedTick } from "@/lib/weather-transform";
 import { useWeatherStream } from "@/lib/useWeatherStream";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+function avg(nums: (number | null)[]) {
+  const vals = nums.filter((n): n is number => n != null);
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
 
 interface DayResponse {
   city: string;
@@ -61,6 +67,37 @@ export default function DayPage({
     }
   });
 
+  const windowStats = useMemo(() => {
+    if (!data?.ticks?.length) return null;
+
+    // Anchor to the latest paced_at in the dataset, not Date.now().
+    // Works the same whether it's today's live-streaming data or a past static day.
+    const anchor = Math.max(
+      ...data.ticks.map(t => t.paced_at ?? 0),
+      ...(data.reciprocalTicks ?? []).map(t => t.paced_at ?? 0)
+    );
+
+    const windows = [
+      { label: "1h", ms: 60 * 60_000 },
+      { label: "2h", ms: 2 * 60 * 60_000 },
+      { label: "4h", ms: 4 * 60 * 60_000 },
+    ];
+
+    return windows.map(({ label, ms }) => {
+      const cutoff = anchor - ms;
+      const linear = data.ticks.filter(t => (t.paced_at ?? 0) >= cutoff);
+      const reciprocal = (data.reciprocalTicks ?? []).filter(t => (t.paced_at ?? 0) >= cutoff);
+
+      return {
+        label,
+        linearAvg: avg(linear.map(t => t.weighted_avg)),
+        reciprocalAvg: avg(reciprocal.map(t => t.weighted_avg)),
+        lastYesPrice: linear.at(-1)?.yes_price ?? null,
+        tickCount: linear.length,
+      };
+    });
+  }, [data?.ticks, data?.reciprocalTicks]);
+
   return (
     <div>
       <div className="text-subtext text-sm mb-2">
@@ -105,6 +142,34 @@ export default function DayPage({
                 tzOffsetMs={priceHistoryData?.tzOffsetMs ?? 0}
               />
           </section>
+
+          {windowStats && (
+            <section>
+              <h2 className="text-sm text-subtext mb-2">Rolling window averages</h2>
+              <table className="text-sm w-full border-collapse">
+                <thead>
+                  <tr className="text-left text-subtext border-b border-border">
+                    <th className="py-1 pr-4">Window</th>
+                    <th className="py-1 pr-4">Linear avg</th>
+                    <th className="py-1 pr-4">Reciprocal avg</th>
+                    <th className="py-1 pr-4">Last yes price</th>
+                    <th className="py-1">Ticks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {windowStats.map((row) => (
+                    <tr key={row.label} className="border-b border-border/50">
+                      <td className="py-1 pr-4 font-mono">{row.label}</td>
+                      <td className="py-1 pr-4">{row.linearAvg != null ? row.linearAvg.toFixed(3) : "—"}</td>
+                      <td className="py-1 pr-4">{row.reciprocalAvg != null ? row.reciprocalAvg.toFixed(3) : "—"}</td>
+                      <td className="py-1 pr-4">{row.lastYesPrice != null ? row.lastYesPrice.toFixed(3) : "—"}</td>
+                      <td className="py-1">{row.tickCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
         </div>
       )}
     </div>
