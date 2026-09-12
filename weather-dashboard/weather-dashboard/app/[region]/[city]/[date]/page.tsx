@@ -125,14 +125,40 @@ export default function DayPage({
         <div className="mt-6 space-y-8 max-w-4xl">
           <section>
             <h2 className="text-sm text-subtext mb-2">Forecast temp over the day</h2>
-            <TempChart
-              ticks={data.ticks}
-              reciprocalTicks={data.reciprocalTicks ?? []}
-              unit={data.unit}
-              winningLow={data.winningLow}
-              winningHigh={data.winningHigh}
-              winningBracket={data.winningBracket}
-            />
+            <div className="flex items-start gap-8">
+              <TempChart
+                ticks={data.ticks}
+                reciprocalTicks={data.reciprocalTicks ?? []}
+                unit={data.unit}
+                winningLow={data.winningLow}
+                winningHigh={data.winningHigh}
+                winningBracket={data.winningBracket}
+              />
+              {windowStats && (
+                <table className="text-sm border-collapse shrink-0">
+                  <thead>
+                    <tr className="text-left text-subtext border-b border-border">
+                      <th className="py-1 pr-4">Window</th>
+                      <th className="py-1 pr-4">Linear avg</th>
+                      <th className="py-1 pr-4">Reciprocal avg</th>
+                      <th className="py-1 pr-4">Last yes price</th>
+                      <th className="py-1">Ticks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {windowStats.map((row) => (
+                      <tr key={row.label} className="border-b border-border/50">
+                        <td className="py-1 pr-4 font-mono">{row.label}</td>
+                        <td className="py-1 pr-4">{row.linearAvg != null ? row.linearAvg.toFixed(3) : "—"}</td>
+                        <td className="py-1 pr-4">{row.reciprocalAvg != null ? row.reciprocalAvg.toFixed(3) : "—"}</td>
+                        <td className="py-1 pr-4">{row.lastYesPrice != null ? row.lastYesPrice.toFixed(3) : "—"}</td>
+                        <td className="py-1">{row.tickCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </section>
           <section>
             <h2 className="text-sm text-subtext mb-2">Market price over the day</h2>
@@ -142,34 +168,6 @@ export default function DayPage({
                 tzOffsetMs={priceHistoryData?.tzOffsetMs ?? 0}
               />
           </section>
-
-          {windowStats && (
-            <section>
-              <h2 className="text-sm text-subtext mb-2">Rolling window averages</h2>
-              <table className="text-sm w-full border-collapse">
-                <thead>
-                  <tr className="text-left text-subtext border-b border-border">
-                    <th className="py-1 pr-4">Window</th>
-                    <th className="py-1 pr-4">Linear avg</th>
-                    <th className="py-1 pr-4">Reciprocal avg</th>
-                    <th className="py-1 pr-4">Last yes price</th>
-                    <th className="py-1">Ticks</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {windowStats.map((row) => (
-                    <tr key={row.label} className="border-b border-border/50">
-                      <td className="py-1 pr-4 font-mono">{row.label}</td>
-                      <td className="py-1 pr-4">{row.linearAvg != null ? row.linearAvg.toFixed(3) : "—"}</td>
-                      <td className="py-1 pr-4">{row.reciprocalAvg != null ? row.reciprocalAvg.toFixed(3) : "—"}</td>
-                      <td className="py-1 pr-4">{row.lastYesPrice != null ? row.lastYesPrice.toFixed(3) : "—"}</td>
-                      <td className="py-1">{row.tickCount}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          )}
         </div>
       )}
     </div>
