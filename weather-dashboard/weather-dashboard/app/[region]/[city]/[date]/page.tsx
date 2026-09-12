@@ -135,6 +135,7 @@ export default function DayPage({
               winningBracket={data.winningBracket}
               windowStats={windowStats ?? undefined}
             />
+          </section>
           <section>
             <h2 className="text-sm text-subtext mb-2">Market price over the day</h2>
             <PriceChart
