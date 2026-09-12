@@ -29,6 +29,7 @@ export default function TempChart({
   winningLow,
   winningHigh,
   winningBracket,
+  windowStats,
 }: {
   ticks: EnrichedTick[];
   reciprocalTicks: EnrichedTick[];
@@ -36,6 +37,14 @@ export default function TempChart({
   winningLow: number | null;
   winningHigh: number | null;
   winningBracket: string | null;
+  windowStats?: {
+    label: string;
+    linearAvg: number | null;
+    reciprocalAvg: number | null;
+    lastYesPrice: number | null;
+    tickCount: number;
+    bracket: string | null;
+  }[];
 }) {
   // Build linear data points keyed by paced_at
   const linearPoints = ticks
@@ -163,6 +172,44 @@ export default function TempChart({
           </tbody>
         </table>
       </div>
+
+      {/* Rolling window averages */}
+      {windowStats && (
+        <div className="shrink-0 self-start pt-9">
+          <table className="text-sm border-collapse">
+            <thead>
+              <tr className="text-[#8b92a0]">
+                <th className="px-3 py-1.5 text-left">window</th>
+                <th className="px-3 py-1.5 text-right text-[#d9534f]">linear avg</th>
+                <th className="px-3 py-1.5 text-right text-[#5bc0de]">rec avg</th>
+                <th className="px-3 py-1.5 text-right">yes price</th>
+                <th className="px-3 py-1.5 text-right">ticks</th>
+                <th className="px-3 py-1.5 text-right">bracket</th>
+              </tr>
+            </thead>
+            <tbody>
+              {windowStats.map((row) => (
+                <tr key={row.label} className="border-t border-[#22262d]">
+                  <td className="px-3 py-1.5 font-mono text-[#8b92a0]">{row.label}</td>
+                  <td className="px-3 py-1.5 text-right text-[#d9534f]">
+                    {row.linearAvg != null ? row.linearAvg.toFixed(3) : "—"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-[#5bc0de]">
+                    {row.reciprocalAvg != null ? row.reciprocalAvg.toFixed(3) : "—"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right">
+                    {row.lastYesPrice != null ? row.lastYesPrice.toFixed(3) : "—"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right">{row.tickCount}</td>
+                  <td className="px-3 py-1.5 text-right text-[#8b92a0]">
+                    {row.bracket ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
