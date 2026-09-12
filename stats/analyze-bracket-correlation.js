@@ -296,12 +296,40 @@ async function main() {
 
   // ---- Print per-city-day table ----
   console.log("\n=== Per city-day breakdown ===\n");
-  for (const r of rows) {
+  const sortedRows = [...rows].sort((a, b) => {
+    if (a.city !== b.city) return a.city.localeCompare(b.city);
+    return a.date.localeCompare(b.date); // "YYYY-MM-DD" sorts chronologically as a string
+  });
+
+  const cols = [
+    { key: "city", label: "city" },
+    { key: "date", label: "date" },
+    { key: "winningBracket", label: "winner" },
+    { key: "winningBracketTickCount", label: "winner_ticks" },
+    { key: "combinedTopBracket", label: "top_bracket" },
+    { key: "combinedTopCount", label: "top_ticks" },
+    { key: "combinedHit", label: "combined", format: (v) => (v ? "HIT" : "miss") },
+    { key: "linearHit", label: "linear", format: (v) => (v ? "HIT" : "miss") },
+    { key: "reciprocalHit", label: "rec", format: (v) => (v ? "HIT" : "miss") },
+    { key: "numBracketsTicked", label: "brackets" },
+  ];
+
+  const widths = cols.map((c) =>
+    Math.max(
+      c.label.length,
+      ...sortedRows.map((r) => String(c.format ? c.format(r[c.key]) : r[c.key]).length)
+    ) + 2
+  );
+
+  console.log(cols.map((c, i) => c.label.padEnd(widths[i])).join(""));
+  for (const r of sortedRows) {
     console.log(
-      `${r.city} ${r.date} | winner=${r.winningBracket} (ticked ${r.winningBracketTickCount}x) | ` +
-        `top-ticked=${r.combinedTopBracket} (${r.combinedTopCount}x) | ` +
-        `combined ${r.combinedHit ? "HIT" : "miss"} | linear ${r.linearHit ? "HIT" : "miss"} | ` +
-        `rec ${r.reciprocalHit ? "HIT" : "miss"} | brackets_ticked=${r.numBracketsTicked}`
+      cols
+        .map((c, i) => {
+          const val = c.format ? c.format(r[c.key]) : r[c.key];
+          return String(val).padEnd(widths[i]);
+        })
+        .join("")
     );
   }
 
