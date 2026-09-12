@@ -24,6 +24,19 @@
  * "11:00 AM"), NOT off captured_at (which is UTC and doesn't track local
  * market hours consistently across cities).
  *
+ * Alternate mode — first-tick analysis (positional arg "firsttick"):
+ *   node analyze-bracket-correlation.js firsttick
+ *
+ * For every bracket that ever gets ticked, finds its FIRST tick of the day
+ * (earliest captured_at) and checks two things:
+ *   1. Does that first tick's yes_price predict whether the bracket goes on
+ *      to actually win the day? (price-calibration tables, several bucket
+ *      widths: 10/20/25/50 cents wide)
+ *   2. Does the HOUR of that first tick predict whether the bracket goes on
+ *      to become the day's top-ticked bracket? (hour tables)
+ * Run separately for linear, reciprocal, and combined (combined = whichever
+ * collection ticked that bracket first in real time, by captured_at).
+ *
  * Optional flags:
  *   --city=Beijing        only analyze one city
  *   --csv=out.csv         also dump the per-city-day rows to a CSV
@@ -59,6 +72,9 @@ if (hourArg) {
     process.exit(1);
   }
 }
+
+// "firsttick" positional arg switches to the first-tick calibration report.
+const firstTickMode = positional.some((a) => /^firsttick$/i.test(a));
 
 function bucketLabel(n) {
   // Cumulative window label: always starts at 8am, ends at the close of
@@ -182,6 +198,192 @@ function rankOf(bracket, sorted) {
   return null; // winning bracket never ticked at all
 }
 
+// ---------------------------------------------------------------------
+// First-tick calibration analysis ("firsttick" mode)
+// ---------------------------------------------------------------------
+
+// Fetch raw tick docs with the fields needed for first-tick analysis
+// (captured_at for "which tick came first", yes_price_cents for the price
+// calibration table, pacing_time for the hour table).
+async function fetchRawTicks(db, collName) {
+  const match = { bracket: { $ne: null, $exists: true } };
+  if (args.city) match.city = args.city;
+  return db
+    .collection(collName)
+    .find(match, {
+      projection: {
+        city: 1,
+        local_date: 1,
+        bracket: 1,
+        captured_at: 1,
+        pacing_time: 1,
+        yes_price_cents: 1,
+      },
+    })
+    .toArray();
+}
+
+// From a list of raw tick docs, keep only the earliest (by captured_at) doc
+// per city|date|bracket combination.
+function firstTickPerBracket(docs) {
+  const map = new Map(); // key "city|date|bracket" -> earliest doc fields
+  for (const doc of docs) {
+    const key = `${doc.city}|${doc.local_date}|${normBracket(doc.bracket)}`;
+    const existing = map.get(key);
+    if (!existing || doc.captured_at < existing.captured_at) {
+      map.set(key, {
+        city: doc.city,
+        local_date: doc.local_date,
+        bracket: normBracket(doc.bracket),
+        captured_at: doc.captured_at,
+        pacing_time: doc.pacing_time,
+        yes_price_cents: doc.yes_price_cents,
+      });
+    }
+  }
+  return map;
+}
+
+// Build the per-bracket entry list used by both the price and hour tables:
+// for every bracket that was ever first-ticked, attach whether it was the
+// eventual day winner and whether it was that method's top-ticked bracket.
+function buildFirstTickEntries(firstTickMap, tickCountsByCityDate, winners) {
+  const entries = [];
+  for (const rec of firstTickMap.values()) {
+    const cdKey = `${rec.city}|${rec.local_date}`;
+    const winningBracket = winners.get(cdKey);
+    const resolved = winningBracket !== undefined;
+    const isWinningBracket = resolved && rec.bracket === winningBracket;
+
+    const countMap = tickCountsByCityDate.get(cdKey) || new Map();
+    const { top } = topBrackets(countMap);
+    const isTopTickedBracket = top.includes(rec.bracket);
+
+    const hourBucket = pacingTimeToBucket(rec.pacing_time);
+    const priceCents =
+      typeof rec.yes_price_cents === "number" ? rec.yes_price_cents : null;
+
+    entries.push({ ...rec, resolved, isWinningBracket, isTopTickedBracket, hourBucket, priceCents });
+  }
+  return entries;
+}
+
+function pct(n, d) {
+  return d === 0 ? "n/a" : `${((n / d) * 100).toFixed(1)}%`;
+}
+
+// Bucket a 0-100 cents value into a width-wide bucket, returns { index, label }.
+function priceBucket(cents, width) {
+  const numBuckets = 100 / width;
+  const index = Math.min(Math.floor(cents / width), numBuckets - 1);
+  return { index, label: `${index * width}-${(index + 1) * width}` };
+}
+
+function printPriceTable(methodLabel, entries, width) {
+  const resolvedWithPrice = entries.filter((e) => e.resolved && e.priceCents !== null);
+  const buckets = new Map(); // index -> { count, winners }
+  for (const e of resolvedWithPrice) {
+    const { index, label } = priceBucket(e.priceCents, width);
+    if (!buckets.has(index)) buckets.set(index, { label, count: 0, winners: 0 });
+    const b = buckets.get(index);
+    b.count++;
+    if (e.isWinningBracket) b.winners++;
+  }
+  console.log(
+    `\n[${methodLabel}] First-tick price -> win rate (${width}-cent buckets, n=${resolvedWithPrice.length})`
+  );
+  console.log(`  ${"price_range".padEnd(14)}${"count".padEnd(8)}${"winners".padEnd(10)}win_rate`);
+  const sortedIdx = [...buckets.keys()].sort((a, b) => a - b);
+  for (const idx of sortedIdx) {
+    const b = buckets.get(idx);
+    console.log(
+      `  ${b.label.padEnd(14)}${String(b.count).padEnd(8)}${String(b.winners).padEnd(10)}${pct(
+        b.winners,
+        b.count
+      )}`
+    );
+  }
+}
+
+function printHourTable(methodLabel, entries) {
+  const withHour = entries.filter((e) => e.hourBucket !== null);
+  const buckets = new Map(); // hourBucket -> { count, topTicked }
+  for (const e of withHour) {
+    if (!buckets.has(e.hourBucket)) buckets.set(e.hourBucket, { count: 0, topTicked: 0 });
+    const b = buckets.get(e.hourBucket);
+    b.count++;
+    if (e.isTopTickedBracket) b.topTicked++;
+  }
+  console.log(
+    `\n[${methodLabel}] First-tick hour -> became day's top-ticked bracket (n=${withHour.length})`
+  );
+  console.log(`  ${"hour".padEnd(10)}${"count".padEnd(8)}${"top_ticked".padEnd(12)}rate`);
+  for (let h = 0; h <= 9; h++) {
+    const b = buckets.get(h);
+    if (!b) continue;
+    console.log(
+      `  ${("hour" + h).padEnd(10)}${String(b.count).padEnd(8)}${String(b.topTicked).padEnd(
+        12
+      )}${pct(b.topTicked, b.count)}`
+    );
+  }
+}
+
+async function runFirstTickAnalysis(db, { linearCounts, recCounts, combinedCounts, winners }) {
+  const linearDocs = await fetchRawTicks(db, "high-temp");
+  const recDocs = await fetchRawTicks(db, "reciprocal");
+
+  const linearFirst = firstTickPerBracket(linearDocs);
+  const recFirst = firstTickPerBracket(recDocs);
+  // Combined: earliest tick regardless of which collection caught it first.
+  const combinedFirst = firstTickPerBracket([...linearDocs, ...recDocs]);
+
+  const linearEntries = buildFirstTickEntries(linearFirst, linearCounts, winners);
+  const recEntries = buildFirstTickEntries(recFirst, recCounts, winners);
+  const combinedEntries = buildFirstTickEntries(combinedFirst, combinedCounts, winners);
+
+  const priceWidths = [10, 20, 25, 50];
+
+  console.log("\n=========================================");
+  console.log("FIRST-TICK PRICE CALIBRATION (does the price a bracket first");
+  console.log("appears at predict whether it goes on to win the day?)");
+  console.log("=========================================");
+  for (const [label, entries] of [
+    ["linear", linearEntries],
+    ["reciprocal", recEntries],
+    ["combined", combinedEntries],
+  ]) {
+    for (const width of priceWidths) {
+      printPriceTable(label, entries, width);
+    }
+  }
+
+  console.log("\n=========================================");
+  console.log("FIRST-TICK HOUR -> TOP-TICKED BRACKET (does showing up early");
+  console.log("predict becoming the day's most-ticked bracket?)");
+  console.log("=========================================");
+  for (const [label, entries] of [
+    ["linear", linearEntries],
+    ["reciprocal", recEntries],
+    ["combined", combinedEntries],
+  ]) {
+    printHourTable(label, entries);
+  }
+
+  if (args.csv) {
+    const fs = require("fs");
+    const allRows = [
+      ...linearEntries.map((e) => ({ method: "linear", ...e })),
+      ...recEntries.map((e) => ({ method: "reciprocal", ...e })),
+      ...combinedEntries.map((e) => ({ method: "combined", ...e })),
+    ];
+    const header = Object.keys(allRows[0] || {}).join(",");
+    const lines = allRows.map((r) => Object.values(r).join(","));
+    fs.writeFileSync(args.csv, [header, ...lines].join("\n"));
+    console.log(`\nWrote CSV to ${args.csv}`);
+  }
+}
+
 async function main() {
   const client = new MongoClient(MONGO_URI);
   await client.connect();
@@ -204,6 +406,12 @@ async function main() {
   const winners = new Map();
   await winningBracketByCityDate(db, "high-temp", winners);
   await winningBracketByCityDate(db, "reciprocal", winners);
+
+  if (firstTickMode) {
+    await runFirstTickAnalysis(db, { linearCounts, recCounts, combinedCounts, winners });
+    await client.close();
+    return;
+  }
 
   // Only evaluate city-days where we know the outcome
   const keys = [...winners.keys()].filter((k) => combinedCounts.has(k));
