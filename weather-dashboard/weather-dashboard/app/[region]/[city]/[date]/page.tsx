@@ -98,20 +98,26 @@ export default function DayPage({
       const recBracket =
         reciprocalAvg != null ? fallbackBracketLabel(reciprocalAvg, data.unit) : null;
 
-      // Yes price: most recent linear tick whose bracket matches the linear
-      // bracket, so the price is for the same contract the label refers to.
+      // Yes price: most recent tick whose bracket matches the collection's
+      // window bracket — so each price reflects the actual contract it refers to.
       const matchingLinearTick = [...linear].reverse().find(
         t => t.point_bracket === linearBracket
       );
-      const lastYesPrice = matchingLinearTick?.yes_price ?? linear.at(-1)?.yes_price ?? null;
+      const lastYesPriceLinear = matchingLinearTick?.yes_price ?? linear.at(-1)?.yes_price ?? null;
+
+      const matchingRecTick = [...reciprocal].reverse().find(
+        t => t.point_bracket === recBracket
+      );
+      const lastYesPriceRec = matchingRecTick?.yes_price ?? reciprocal.at(-1)?.yes_price ?? null;
 
       return {
         label,
         linearAvg,
         linearBracket,
+        lastYesPriceLinear,
         reciprocalAvg,
         recBracket,
-        lastYesPrice,
+        lastYesPriceRec,
         tickCount: linear.length
       };
     });

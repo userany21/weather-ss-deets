@@ -40,11 +40,12 @@ export default function TempChart({
   windowStats?: {
     label: string;
     linearAvg: number | null;
-    reciprocalAvg: number | null;
-    lastYesPrice: number | null;
-    tickCount: number;
     linearBracket: string | null;
+    lastYesPriceLinear: number | null;
+    reciprocalAvg: number | null;
     recBracket: string | null;
+    lastYesPriceRec: number | null;
+    tickCount: number;
   }[];
 }) {
   // Build linear data points keyed by paced_at
@@ -177,16 +178,15 @@ export default function TempChart({
       {/* Rolling window averages */}
       {windowStats && (
         <div className="shrink-0 self-start pt-9">
-          <table className="text-sm border-collapse">
+          <table className="text-lg border-collapse">
             <thead>
               <tr className="text-[#8b92a0]">
                 <th className="px-3 py-1.5 text-left">window</th>
                 <th className="px-3 py-1.5 text-right text-[#d9534f]">linear avg</th>
+                <th className="px-3 py-1.5 text-right text-[#d9534f]">bracket price L</th>
                 <th className="px-3 py-1.5 text-right text-[#5bc0de]">rec avg</th>
-                <th className="px-3 py-1.5 text-right">yes price</th>
+                <th className="px-3 py-1.5 text-right text-[#5bc0de]">bracket price R</th>
                 <th className="px-3 py-1.5 text-right">ticks</th>
-                <th className="px-3 py-1.5 text-right text-[#d9534f]">bracket linear</th>
-                <th className="px-3 py-1.5 text-right text-[#5bc0de]">bracket rec</th>
               </tr>
             </thead>
             <tbody>
@@ -196,19 +196,16 @@ export default function TempChart({
                   <td className="px-3 py-1.5 text-right text-[#d9534f]">
                     {row.linearAvg != null ? row.linearAvg.toFixed(3) : "—"}
                   </td>
+                  <td className="px-3 py-1.5 text-right text-[#d9534f]" title={row.linearBracket ?? undefined}>
+                    {row.lastYesPriceLinear != null ? row.lastYesPriceLinear.toFixed(3) : "—"}
+                  </td>
                   <td className="px-3 py-1.5 text-right text-[#5bc0de]">
                     {row.reciprocalAvg != null ? row.reciprocalAvg.toFixed(3) : "—"}
                   </td>
-                  <td className="px-3 py-1.5 text-right">
-                    {row.lastYesPrice != null ? row.lastYesPrice.toFixed(3) : "—"}
+                  <td className="px-3 py-1.5 text-right text-[#5bc0de]" title={row.recBracket ?? undefined}>
+                    {row.lastYesPriceRec != null ? row.lastYesPriceRec.toFixed(3) : "—"}
                   </td>
                   <td className="px-3 py-1.5 text-right">{row.tickCount}</td>
-                  <td className="px-3 py-1.5 text-right text-[#d9534f]">
-                    {row.linearBracket ?? "—"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-[#5bc0de]">
-                    {row.recBracket ?? "—"}
-                  </td>
                 </tr>
               ))}
             </tbody>
