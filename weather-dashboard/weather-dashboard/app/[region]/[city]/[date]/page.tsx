@@ -6,6 +6,7 @@ import useSWR from "swr";
 import TempChart from "@/components/TempChart";
 import PriceChart, { type BracketHistory } from "@/components/PriceChart";
 import type { EnrichedTick } from "@/lib/weather-transform";
+import { fallbackBracketLabel } from "@/lib/weather-transform";
 import { useWeatherStream } from "@/lib/useWeatherStream";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -88,13 +89,33 @@ export default function DayPage({
       const linear = data.ticks.filter(t => (t.paced_at ?? 0) >= cutoff);
       const reciprocal = (data.reciprocalTicks ?? []).filter(t => (t.paced_at ?? 0) >= cutoff);
 
+      const linearAvg = avg(linear.map(t => t.weighted_avg));
+      const reciprocalAvg = avg(reciprocal.map(t => t.weighted_avg));
+
+      // Derive the bracket from the window average, not from the last
+      // individual tick's stored point_bracket (which could be a different
+      // bracket than what the displayed averages imply).
+      const combinedAvg =
+        linearAvg != null && reciprocalAvg != null
+          ? (linearAvg + reciprocalAvg) / 2
+          : (linearAvg ?? reciprocalAvg);
+      const derivedBracket =
+        combinedAvg != null ? fallbackBracketLabel(combinedAvg, data.unit) : null;
+
+      // Yes price: most recent tick whose bracket matches the derived bracket,
+      // so the price is for the same contract the bracket label refers to.
+      const matchingLinearTick = [...linear].reverse().find(
+        t => t.point_bracket === derivedBracket
+      );
+      const lastYesPrice = matchingLinearTick?.yes_price ?? linear.at(-1)?.yes_price ?? null;
+
       return {
         label,
-        linearAvg: avg(linear.map(t => t.weighted_avg)),
-        reciprocalAvg: avg(reciprocal.map(t => t.weighted_avg)),
-        lastYesPrice: linear.at(-1)?.yes_price ?? null,
+        linearAvg,
+        reciprocalAvg,
+        lastYesPrice,
         tickCount: linear.length,
-        bracket: linear.at(-1)?.point_bracket ?? null,
+        bracket: derivedBracket,
       };
     });
   }, [data?.ticks, data?.reciprocalTicks]);

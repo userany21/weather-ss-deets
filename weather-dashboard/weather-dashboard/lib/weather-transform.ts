@@ -82,7 +82,7 @@ function attachPacedAt(ticks: Tick[]): (Tick & { paced_at: number | null; _mins:
  *   Celsius  → single-degree  e.g. "26°C"
  *   Fahrenheit → two-degree   e.g. "90-91°F"  (low always on an even boundary)
  */
-function fallbackBracketLabel(weightedAvg: number, unit: "F" | "C"): string {
+export function fallbackBracketLabel(weightedAvg: number, unit: "F" | "C"): string {
   const floor = Math.floor(weightedAvg);
   const decimal = weightedAvg - floor;
   const rounded = decimal >= 0.8 ? floor + 1 : floor;
