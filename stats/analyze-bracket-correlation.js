@@ -37,6 +37,20 @@
  * Run separately for linear, reciprocal, and combined (combined = whichever
  * collection ticked that bracket first in real time, by captured_at).
  *
+ * Alternate mode — joint analysis (positional arg "joint"):
+ *   node analyze-bracket-correlation.js joint
+ *
+ * This is the "combine hour0 and firsttick" mode. Instead of reporting the
+ * hour0-leadership hit rate and the first-tick price/hour calibration as
+ * two separate marginal tables, it splits every bracket into two groups —
+ * "was already the hour0-window top-ticked bracket" vs. "was not" — and
+ * re-runs the SAME price and hour calibration tables within each group.
+ * That answers the actual question ("which signal matters, and do they
+ * stack") directly: if the hour0-leader group's price curve looks the same
+ * as the non-leader group's, hour0 leadership isn't adding anything beyond
+ * price. If it shifts win rate/edge meaningfully at the same price, the two
+ * signals combine.
+ *
  * Optional flags:
  *   --city=Beijing        only analyze one city
  *   --csv=out.csv         also dump the per-city-day rows to a CSV
@@ -76,6 +90,10 @@ if (hourArg) {
 // "firsttick" positional arg switches to the first-tick calibration report.
 const firstTickMode = positional.some((a) => /^firsttick$/i.test(a));
 
+// "joint" positional arg switches to the combined hour0-leadership x
+// first-tick calibration report.
+const jointMode = positional.some((a) => /^joint$/i.test(a));
+
 function bucketLabel(n) {
   // Cumulative window label: always starts at 8am, ends at the close of
   // hour bucket n.
@@ -109,8 +127,16 @@ function pacingTimeToBucket(pacingTime) {
 }
 
 // Aggregate {city, local_date, bracket} -> tick count for one collection,
-// optionally restricted to a single hour bucket (via pacing_time).
-async function ticksByCityDateBracket(db, collName) {
+// optionally restricted to a single cumulative hour window (via
+// pacing_time). `hourFilterOverride` lets callers (like the joint-mode
+// analysis) ask for a specific window — e.g. always "hour0" — regardless of
+// whatever --hourN positional arg the user passed for the main report.
+// Pass `undefined` to fall back to the global hourBucketFilter, or `null`
+// explicitly for "no filter, use every tick."
+async function ticksByCityDateBracket(db, collName, hourFilterOverride) {
+  const effectiveHourFilter =
+    hourFilterOverride !== undefined ? hourFilterOverride : hourBucketFilter;
+
   const match = { bracket: { $ne: null, $exists: true } };
   if (args.city) match.city = args.city;
 
@@ -123,11 +149,11 @@ async function ticksByCityDateBracket(db, collName) {
 
   const map = new Map(); // key "city|date" -> Map(bracket -> count)
   for (const doc of docs) {
-    if (hourBucketFilter !== null) {
+    if (effectiveHourFilter !== null) {
       const bucket = pacingTimeToBucket(doc.pacing_time);
       // Cumulative: include everything from bucket 0 up through the
       // requested bucket (inclusive), i.e. "8am through end of hourN".
-      if (bucket === null || bucket > hourBucketFilter) continue;
+      if (bucket === null || bucket > effectiveHourFilter) continue;
     }
     const key = `${doc.city}|${doc.local_date}`;
     if (!map.has(key)) map.set(key, new Map());
@@ -246,7 +272,8 @@ function firstTickPerBracket(docs) {
 
 // Build the per-bracket entry list used by both the price and hour tables:
 // for every bracket that was ever first-ticked, attach whether it was the
-// eventual day winner and whether it was that method's top-ticked bracket.
+// eventual day winner and whether it was that method's top-ticked bracket
+// (top-ticked here means "most-ticked over the WHOLE day", per `tickCountsByCityDate`).
 function buildFirstTickEntries(firstTickMap, tickCountsByCityDate, winners) {
   const entries = [];
   for (const rec of firstTickMap.values()) {
@@ -332,7 +359,9 @@ function printHourTable(methodLabel, entries) {
       buckets.set(e.hourBucket, { count: 0, topTicked: 0, edgeSum: 0, edgeN: 0 });
     const b = buckets.get(e.hourBucket);
     b.count++;
-    if (e.isTopTickedBracket) b.topTicked++;
+    // Works for both first-tick "top ticked overall" entries and joint-mode
+    // "is hour0 leader" entries — whichever flag the caller attached.
+    if (e.isTopTickedBracket || e.isHour0TopTicked) b.topTicked++;
     const edge = edgeCents(e);
     if (edge !== null) {
       b.edgeSum += edge;
@@ -414,6 +443,93 @@ async function runFirstTickAnalysis(db, { linearCounts, recCounts, combinedCount
   }
 }
 
+// ---------------------------------------------------------------------
+// Joint analysis ("joint" mode) — combines the hour0-leadership signal
+// (from the main report) with the first-tick price/hour calibration (from
+// firsttick mode) by splitting brackets into "is / isn't already the
+// hour0-window leader" and re-running the same calibration tables within
+// each group. If the two groups' curves look basically the same, hour0
+// leadership isn't telling you anything price doesn't already tell you.
+// If a hour0-leader bracket at, say, 30-40¢ wins noticeably more (or less)
+// often than a non-leader bracket at the same first-tick price, the two
+// signals genuinely combine and you should be using both together.
+// ---------------------------------------------------------------------
+async function runJointAnalysis(db, { winners }) {
+  // Tick counts restricted to the hour0 window specifically (8am-9am local),
+  // regardless of any --hourN arg the user passed — the joint report always
+  // asks "who was leading by the end of hour0."
+  const hour0Linear = await ticksByCityDateBracket(db, "high-temp", 0);
+  const hour0Rec = await ticksByCityDateBracket(db, "reciprocal", 0);
+  const hour0Combined = mergeCounts(hour0Linear, hour0Rec);
+
+  const linearDocs = await fetchRawTicks(db, "high-temp");
+  const recDocs = await fetchRawTicks(db, "reciprocal");
+  const combinedFirst = firstTickPerBracket([...linearDocs, ...recDocs]);
+
+  const entries = [];
+  for (const rec of combinedFirst.values()) {
+    const cdKey = `${rec.city}|${rec.local_date}`;
+    const winningBracket = winners.get(cdKey);
+    const resolved = winningBracket !== undefined;
+    const isWinningBracket = resolved && rec.bracket === winningBracket;
+
+    const hour0CountMap = hour0Combined.get(cdKey) || new Map();
+    const { top: hour0Top } = topBrackets(hour0CountMap);
+    // If the bracket never ticked at all in the hour0 window (e.g. its
+    // first tick came later in the day), it can't be the hour0 leader.
+    const isHour0TopTicked = hour0CountMap.size > 0 && hour0Top.includes(rec.bracket);
+
+    const hourBucket = pacingTimeToBucket(rec.pacing_time);
+    const priceCents = typeof rec.yes_price_cents === "number" ? rec.yes_price_cents : null;
+
+    entries.push({ ...rec, resolved, isWinningBracket, isHour0TopTicked, hourBucket, priceCents });
+  }
+
+  console.log("\n=========================================");
+  console.log("JOINT: overall win rate/edge, hour0 leader vs. non-leader");
+  console.log("=========================================");
+  for (const leaderFlag of [true, false]) {
+    const subset = entries.filter((e) => e.isHour0TopTicked === leaderFlag && e.resolved);
+    const wins = subset.filter((e) => e.isWinningBracket).length;
+    const edges = subset.map(edgeCents).filter((c) => c !== null);
+    const avgEdge = edges.length ? edges.reduce((a, b) => a + b, 0) / edges.length : null;
+    console.log(
+      `  hour0-leader=${String(leaderFlag).padEnd(6)} n=${String(subset.length).padEnd(6)}` +
+        `win_rate=${pct(wins, subset.length).padEnd(8)}avg_edge=${
+          avgEdge !== null ? fmtCents(avgEdge) : "n/a"
+        }`
+    );
+  }
+
+  console.log("\n=========================================");
+  console.log("JOINT: hour0 leadership x first-tick price");
+  console.log("(does already leading by hour0 shift the price-calibration");
+  console.log("curve, compared to brackets that are NOT leading?)");
+  console.log("=========================================");
+  for (const leaderFlag of [true, false]) {
+    const subset = entries.filter((e) => e.isHour0TopTicked === leaderFlag);
+    printPriceTable(`hour0-leader=${leaderFlag}`, subset, 20);
+  }
+
+  console.log("\n=========================================");
+  console.log("JOINT: hour0 leadership x first-tick hour");
+  console.log("(within each leadership group, does the hour it first ticked");
+  console.log("still carry information?)");
+  console.log("=========================================");
+  for (const leaderFlag of [true, false]) {
+    const subset = entries.filter((e) => e.isHour0TopTicked === leaderFlag);
+    printHourTable(`hour0-leader=${leaderFlag}`, subset);
+  }
+
+  if (args.csv) {
+    const fs = require("fs");
+    const header = Object.keys(entries[0] || {}).join(",");
+    const lines = entries.map((r) => Object.values(r).join(","));
+    fs.writeFileSync(args.csv, [header, ...lines].join("\n"));
+    console.log(`\nWrote CSV to ${args.csv}`);
+  }
+}
+
 async function main() {
   const client = new MongoClient(MONGO_URI);
   await client.connect();
@@ -429,19 +545,28 @@ async function main() {
     );
   }
 
-  const linearCounts = await ticksByCityDateBracket(db, "high-temp");
-  const recCounts = await ticksByCityDateBracket(db, "reciprocal");
-  const combinedCounts = mergeCounts(linearCounts, recCounts);
-
   const winners = new Map();
   await winningBracketByCityDate(db, "high-temp", winners);
   await winningBracketByCityDate(db, "reciprocal", winners);
 
   if (firstTickMode) {
+    const linearCounts = await ticksByCityDateBracket(db, "high-temp", null);
+    const recCounts = await ticksByCityDateBracket(db, "reciprocal", null);
+    const combinedCounts = mergeCounts(linearCounts, recCounts);
     await runFirstTickAnalysis(db, { linearCounts, recCounts, combinedCounts, winners });
     await client.close();
     return;
   }
+
+  if (jointMode) {
+    await runJointAnalysis(db, { winners });
+    await client.close();
+    return;
+  }
+
+  const linearCounts = await ticksByCityDateBracket(db, "high-temp");
+  const recCounts = await ticksByCityDateBracket(db, "reciprocal");
+  const combinedCounts = mergeCounts(linearCounts, recCounts);
 
   // Only evaluate city-days where we know the outcome
   const keys = [...winners.keys()].filter((k) => combinedCounts.has(k));
@@ -572,9 +697,6 @@ async function main() {
   }
 
   // ---- Summary ----
-  function pct(n, d) {
-    return d === 0 ? "n/a" : `${((n / d) * 100).toFixed(1)}%`;
-  }
   function avg(arr) {
     return arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : "n/a";
   }
