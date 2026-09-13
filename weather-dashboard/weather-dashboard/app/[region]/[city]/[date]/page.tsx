@@ -92,20 +92,16 @@ export default function DayPage({
       const linearAvg = avg(linear.map(t => t.weighted_avg));
       const reciprocalAvg = avg(reciprocal.map(t => t.weighted_avg));
 
-      // Derive the bracket from the window average, not from the last
-      // individual tick's stored point_bracket (which could be a different
-      // bracket than what the displayed averages imply).
-      const combinedAvg =
-        linearAvg != null && reciprocalAvg != null
-          ? (linearAvg + reciprocalAvg) / 2
-          : (linearAvg ?? reciprocalAvg);
-      const derivedBracket =
-        combinedAvg != null ? fallbackBracketLabel(combinedAvg, data.unit) : null;
+      // Derive brackets independently from each collection's window average.
+      const linearBracket =
+        linearAvg != null ? fallbackBracketLabel(linearAvg, data.unit) : null;
+      const recBracket =
+        reciprocalAvg != null ? fallbackBracketLabel(reciprocalAvg, data.unit) : null;
 
-      // Yes price: most recent tick whose bracket matches the derived bracket,
-      // so the price is for the same contract the bracket label refers to.
+      // Yes price: most recent linear tick whose bracket matches the linear
+      // bracket, so the price is for the same contract the label refers to.
       const matchingLinearTick = [...linear].reverse().find(
-        t => t.point_bracket === derivedBracket
+        t => t.point_bracket === linearBracket
       );
       const lastYesPrice = matchingLinearTick?.yes_price ?? linear.at(-1)?.yes_price ?? null;
 
@@ -115,7 +111,8 @@ export default function DayPage({
         reciprocalAvg,
         lastYesPrice,
         tickCount: linear.length,
-        bracket: derivedBracket,
+        linearBracket,
+        recBracket,
       };
     });
   }, [data?.ticks, data?.reciprocalTicks]);

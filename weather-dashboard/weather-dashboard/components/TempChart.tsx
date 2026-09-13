@@ -43,7 +43,8 @@ export default function TempChart({
     reciprocalAvg: number | null;
     lastYesPrice: number | null;
     tickCount: number;
-    bracket: string | null;
+    linearBracket: string | null;
+    recBracket: string | null;
   }[];
 }) {
   // Build linear data points keyed by paced_at
@@ -184,7 +185,8 @@ export default function TempChart({
                 <th className="px-3 py-1.5 text-right text-[#5bc0de]">rec avg</th>
                 <th className="px-3 py-1.5 text-right">yes price</th>
                 <th className="px-3 py-1.5 text-right">ticks</th>
-                <th className="px-3 py-1.5 text-right">bracket</th>
+                <th className="px-3 py-1.5 text-right text-[#d9534f]">bracket linear</th>
+                <th className="px-3 py-1.5 text-right text-[#5bc0de]">bracket rec</th>
               </tr>
             </thead>
             <tbody>
@@ -201,8 +203,11 @@ export default function TempChart({
                     {row.lastYesPrice != null ? row.lastYesPrice.toFixed(3) : "—"}
                   </td>
                   <td className="px-3 py-1.5 text-right">{row.tickCount}</td>
-                  <td className="px-3 py-1.5 text-right text-[#8b92a0]">
-                    {row.bracket ?? "—"}
+                  <td className="px-3 py-1.5 text-right text-[#d9534f]">
+                    {row.linearBracket ?? "—"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right text-[#5bc0de]">
+                    {row.recBracket ?? "—"}
                   </td>
                 </tr>
               ))}
