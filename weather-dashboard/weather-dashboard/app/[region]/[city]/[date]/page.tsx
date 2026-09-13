@@ -108,11 +108,11 @@ export default function DayPage({
       return {
         label,
         linearAvg,
-        reciprocalAvg,
-        lastYesPrice,
-        tickCount: linear.length,
         linearBracket,
+        reciprocalAvg,
         recBracket,
+        lastYesPrice,
+        tickCount: linear.length
       };
     });
   }, [data?.ticks, data?.reciprocalTicks]);
