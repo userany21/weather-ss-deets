@@ -18,6 +18,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <Link href="/live" className="text-live text-sm font-medium">
             ● Live now
           </Link>
+          <Link href="/stats" className="text-subtext text-sm font-medium hover:text-text transition-colors">
+            Stats Explorer
+          </Link>
         </header>
         <main className="p-6">{children}</main>
       </body>
