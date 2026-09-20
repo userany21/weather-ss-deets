@@ -5,8 +5,23 @@ export async function GET(_req: Request, { params }: { params: { city: string } 
   const city = decodeURIComponent(params.city).toLowerCase();
   const collection = await getHighTempCollection();
 
-  const dates: string[] = await collection.distinct("local_date", { city });
+  const [dates, aggResult] = await Promise.all([
+    collection.distinct("local_date", { city }),
+    collection.aggregate([
+      { $match: { city } },
+      { $group: { _id: "$local_date", ticksOnDay: { $sum: 1 } } },
+      { $group: { _id: null, avgTicksPerDay: { $avg: "$ticksOnDay" }, totalDays: { $sum: 1 } } },
+    ]).toArray(),
+  ]);
+
   dates.sort().reverse(); // most recent first
 
-  return NextResponse.json({ city, dates });
+  const stats = aggResult[0] as { avgTicksPerDay: number; totalDays: number } | undefined;
+
+  return NextResponse.json({
+    city,
+    dates,
+    avgTicksPerDay: stats?.avgTicksPerDay ?? null,
+    totalDays: stats?.totalDays ?? 0,
+  });
 }
