@@ -50,6 +50,13 @@ export default function DayPage({
     refreshInterval: isToday ? 5 * 60_000 : 0,
   });
 
+  // City-level stats (avg ticks/day) — static, no refresh needed.
+  const { data: cityStats } = useSWR<{ avgTicksPerDay: number | null; totalDays: number }>(
+    `/api/dates/${encodeURIComponent(cityDecoded)}`,
+    fetcher,
+    { revalidateOnFocus: false }
+  );
+
   // Polymarket price histories — loaded after tick data arrives so we have
   // city + date confirmed. Refreshes every 5 min for today; static for past.
   const { data: priceHistoryData } = useSWR<PriceHistoryResponse>(
@@ -140,6 +147,14 @@ export default function DayPage({
         {cityDecoded} — {params.date}
         {isToday && <span className="ml-2 text-live text-sm align-middle">● updating live</span>}
       </h1>
+      {cityStats?.avgTicksPerDay != null && (
+        <div className="text-sm text-subtext mb-4">
+          avg{" "}
+          <span className="text-accent font-medium">{cityStats.avgTicksPerDay.toFixed(1)}</span>
+          {" "}ticks/day
+          <span className="ml-1 opacity-50">({cityStats.totalDays}d)</span>
+        </div>
+      )}
 
       {isLoading && <div className="text-subtext mt-4">Loading…</div>}
       {data && data.ticks.length === 0 && (
