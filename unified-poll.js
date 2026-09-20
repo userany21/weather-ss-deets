@@ -234,59 +234,66 @@ async function run() {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page    = await context.newPage();
 
-  // Block images, fonts, stylesheets and media — we only need the DOM text for
-  // scraping model tables, so these resource types are pure waste.
+  // Block images, fonts, and media — these are the heavy resources we don't
+  // need for text scraping. Stylesheets are intentionally kept: without them
+  // the site's header loses its positioning and overlaps the login button.
   await page.route('**/*', (route) => {
     const type = route.request().resourceType();
-    if (['image', 'media', 'font', 'stylesheet'].includes(type)) {
+    if (['image', 'media', 'font'].includes(type)) {
       route.abort();
     } else {
       route.continue();
     }
   });
 
-  // Login once, then visit each due city sequentially in the same tab
-  await page.goto('https://wethr.net/login');
-  await page.fill('input[type="email"]',    process.env.WETHR_EMAIL);
-  await page.fill('input[type="password"]', process.env.WETHR_PASSWORD);
-  await page.click('button[type="submit"]');
-  await page.waitForLoadState('networkidle');
+  // Wrap everything from browser open onward in try/finally so the browser
+  // is always closed — even if login or a scrape throws an error. Without
+  // this, a failed run leaks the Chromium process and it stays alive until
+  // the server is restarted.
+  try {
+    // Login once, then visit each due city sequentially in the same tab
+    await page.goto('https://wethr.net/login');
+    await page.fill('input[type="email"]',    process.env.WETHR_EMAIL);
+    await page.fill('input[type="password"]', process.env.WETHR_PASSWORD);
+    await page.click('button[type="submit"]');
+    await page.waitForLoadState('networkidle');
 
-  for (const { city, target } of dueCities) {
-    try {
-      await page.goto(`https://wethr.net/market/${city.slug}`, { waitUntil: 'networkidle' });
-      const pacing = await getPagePacingTime(page);
+    for (const { city, target } of dueCities) {
+      try {
+        await page.goto(`https://wethr.net/market/${city.slug}`, { waitUntil: 'networkidle' });
+        const pacing = await getPagePacingTime(page);
 
-      const pacingDateTime = pacing
-        ? target.set({ hour: pacing.hour, minute: pacing.minute, second: 0, millisecond: 0 })
-        : null;
+        const pacingDateTime = pacing
+          ? target.set({ hour: pacing.hour, minute: pacing.minute, second: 0, millisecond: 0 })
+          : null;
 
-      if (!pacingDateTime || pacingDateTime < target) {
+        if (!pacingDateTime || pacingDateTime < target) {
+          console.log(
+            `⏳ ${city.slug}: pacing not yet at ${target.toFormat('h:mm a')} ` +
+            `(site shows ${pacing ? pacingDateTime.toFormat('h:mm a') : 'unreadable'}), will recheck next poll`
+          );
+          continue;
+        }
+
+        console.log(`→ ${city.slug}: pacing reached/passed ${target.toFormat('h:mm a')}, capturing now`);
+        await scrapeAndSend(page, city.slug, city.label, city.unit, city.tz, city.region);
+
+        const nextTarget   = target.plus({ minutes: city.cadenceMinutes });
+        const withinWindow = nextTarget.hour < END_HOUR;
+        state[city.slug].nextTarget = withinWindow ? nextTarget.toISO() : null;
+        saveState(state);
+
         console.log(
-          `⏳ ${city.slug}: pacing not yet at ${target.toFormat('h:mm a')} ` +
-          `(site shows ${pacing ? pacingDateTime.toFormat('h:mm a') : 'unreadable'}), will recheck next poll`
+          `✓ ${city.slug} captured at pacing ${target.toFormat('h:mm a')}, ` +
+          `next target ${withinWindow ? nextTarget.toFormat('h:mm a') : 'none (past window)'}`
         );
-        continue;
+      } catch (err) {
+        console.error(`✗ ${city.slug} failed:`, err.message);
       }
-
-      console.log(`→ ${city.slug}: pacing reached/passed ${target.toFormat('h:mm a')}, capturing now`);
-      await scrapeAndSend(page, city.slug, city.label, city.unit, city.tz, city.region);
-
-      const nextTarget   = target.plus({ minutes: city.cadenceMinutes });
-      const withinWindow = nextTarget.hour < END_HOUR;
-      state[city.slug].nextTarget = withinWindow ? nextTarget.toISO() : null;
-      saveState(state);
-
-      console.log(
-        `✓ ${city.slug} captured at pacing ${target.toFormat('h:mm a')}, ` +
-        `next target ${withinWindow ? nextTarget.toFormat('h:mm a') : 'none (past window)'}`
-      );
-    } catch (err) {
-      console.error(`✗ ${city.slug} failed:`, err.message);
     }
+  } finally {
+    await browser.close();
   }
-
-  await browser.close();
 }
 
 run()
