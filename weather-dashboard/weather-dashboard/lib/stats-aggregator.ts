@@ -27,6 +27,10 @@ export interface FeatureRow {
   tick_count_through_hour: number[];   // length 10, index = hourN bucket
   rank_through_hour: (number | null)[]; // length 10, sequential 1-indexed rank
   is_leader_through_hour: boolean[];   // length 10, true when tied for rank 1
+  /** First yes_price_cents seen within each hour bucket for this bracket (null = no tick that hour) */
+  price_at_hour?: (number | null)[];
+  /** (rank1_ticks − rank2_ticks) / total_ticks per hour — city-day level signal */
+  lead_margin_through_hour?: number[];
   final_tick_count: number;
   final_rank: number | null;
   resolved: boolean;
@@ -271,6 +275,131 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
       const idx = Number(parts[1]);
       const r = parts[2];
       return `Rank ${r} @${HOUR_LABELS[idx] ?? `H${idx}`}`;
+    },
+  },
+
+  // ------------------------------------------------------------------
+  // price_at_hour: first yes_price_cents seen in hour bucket N, 20¢ wide buckets
+  // ------------------------------------------------------------------
+  {
+    id: "price_at_hour",
+    label: "Price at Hour-N",
+    configSchema: {
+      key: "n",
+      type: "select",
+      options: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      default: 2,
+    },
+    bucket(row, { n = 2 }) {
+      const idx = clampHour(n);
+      const price = (row.price_at_hour ?? [])[idx] ?? null;
+      if (price == null) return null;
+      const width = 20;
+      const lo = Math.floor(price / width) * width;
+      const hi = lo + width - 1;
+      return `pah:${idx}:${lo}:${hi}`;
+    },
+    bucketLabel(key) {
+      const parts = key.split(":");
+      const idx = Number(parts[1]);
+      return `Price@${HOUR_LABELS[idx] ?? `H${idx}`}: ${parts[2]}–${parts[3]}¢`;
+    },
+  },
+
+  // ------------------------------------------------------------------
+  // lead_margin: normalised (rank1_ticks - rank2_ticks) / total_ticks at hour N
+  // Tiered: tight (<15%), moderate (15-40%), decisive (>40%)
+  // ------------------------------------------------------------------
+  {
+    id: "lead_margin",
+    label: "Lead Margin at Hour-N",
+    configSchema: {
+      key: "n",
+      type: "select",
+      options: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      default: 1,
+    },
+    bucket(row, { n = 1 }) {
+      const idx = clampHour(n);
+      const margin = (row.lead_margin_through_hour ?? [])[idx] ?? null;
+      // Exclude rows with no ticks at all by hour N
+      if (margin == null || row.tick_count_through_hour[idx] === 0) return null;
+      const tier =
+        margin < 0.15 ? "tight" :
+        margin < 0.40 ? "moderate" :
+        "decisive";
+      return `lm:${idx}:${tier}`;
+    },
+    bucketLabel(key) {
+      const parts = key.split(":");
+      const idx = Number(parts[1]);
+      const tier = parts[2];
+      const label =
+        tier === "tight"    ? "Tight (<15%)"       :
+        tier === "moderate" ? "Moderate (15–40%)"  :
+                              "Decisive (>40%)";
+      return `Lead Margin@${HOUR_LABELS[idx] ?? `H${idx}`}: ${label}`;
+    },
+  },
+
+  // ------------------------------------------------------------------
+  // rank_trend: direction of rank change between hour N-2 and hour N
+  // rising = improved rank (lower number), falling = worsened, stable = same
+  // Options start at 2 so there's always a prior window to compare against
+  // ------------------------------------------------------------------
+  {
+    id: "rank_trend",
+    label: "Rank Trend at Hour-N",
+    configSchema: {
+      key: "n",
+      type: "select",
+      options: [2, 3, 4, 5, 6, 7, 8, 9],
+      default: 3,
+    },
+    bucket(row, { n = 3 }) {
+      const idx = clampHour(n);
+      const prevIdx = Math.max(0, idx - 2);
+      if (idx === prevIdx) return null; // guard: shouldn't happen given options start at 2
+      const nowRank = row.rank_through_hour[idx];
+      const prevRank = row.rank_through_hour[prevIdx];
+      if (nowRank == null || prevRank == null) return null;
+      const trend =
+        nowRank < prevRank ? "rising"  :
+        nowRank > prevRank ? "falling" :
+        "stable";
+      return `rt:${idx}:${trend}`;
+    },
+    bucketLabel(key) {
+      const parts = key.split(":");
+      const idx = Number(parts[1]);
+      const trend = parts[2];
+      const arrow =
+        trend === "rising"  ? "↑" :
+        trend === "falling" ? "↓" : "→";
+      return `Rank Trend@${HOUR_LABELS[idx] ?? `H${idx}`}: ${arrow} ${trend.charAt(0).toUpperCase() + trend.slice(1)}`;
+    },
+  },
+
+  // ------------------------------------------------------------------
+  // final_tick_count: total ticks for this bracket across the full day
+  // Bucketed into sparse/present/strong/dominant
+  // ------------------------------------------------------------------
+  {
+    id: "final_tick_count",
+    label: "Final Tick Count",
+    bucket(row) {
+      const c = row.final_tick_count;
+      if (!c) return null;
+      const range =
+        c <= 3  ? "1–3"  :
+        c <= 8  ? "4–8"  :
+        c <= 16 ? "9–16" :
+        "17+";
+      return `ftc:${range}`;
+    },
+    bucketLabel(key) {
+      const range = key.slice("ftc:".length);
+      return `Final Ticks: ${range}`;
     },
   },
 ];

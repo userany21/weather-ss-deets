@@ -166,6 +166,9 @@ function buildBracketData(docs) {
       cd.brackets.set(bracket, {
         ticksPerHour: new Array(NUM_HOUR_BUCKETS).fill(0),
         firstTick: null,
+        // First yes_price_cents seen within each hour bucket (by captured_at order)
+        firstPricePerHour: new Array(NUM_HOUR_BUCKETS).fill(null),
+        firstCapturedAtPerHour: new Array(NUM_HOUR_BUCKETS).fill(null),
       });
     }
     const br = cd.brackets.get(bracket);
@@ -174,6 +177,16 @@ function buildBracketData(docs) {
     const bucket = pacingTimeToBucket(doc.pacing_time);
     if (bucket !== null) {
       br.ticksPerHour[bucket]++;
+
+      // Track first price seen in this hour bucket (earliest captured_at wins)
+      if (
+        typeof doc.yes_price_cents === "number" &&
+        (br.firstCapturedAtPerHour[bucket] === null ||
+          doc.captured_at < br.firstCapturedAtPerHour[bucket])
+      ) {
+        br.firstCapturedAtPerHour[bucket] = doc.captured_at;
+        br.firstPricePerHour[bucket] = doc.yes_price_cents;
+      }
     }
 
     // Track first tick by earliest captured_at (lexicographic ISO string compare)
@@ -202,7 +215,12 @@ function mergeBracketData(mapA, mapB) {
       brackets: new Map(
         [...cdA.brackets.entries()].map(([b, brA]) => [
           b,
-          { ticksPerHour: [...brA.ticksPerHour], firstTick: brA.firstTick },
+          {
+            ticksPerHour: [...brA.ticksPerHour],
+            firstTick: brA.firstTick,
+            firstPricePerHour: [...brA.firstPricePerHour],
+            firstCapturedAtPerHour: [...brA.firstCapturedAtPerHour],
+          },
         ])
       ),
     });
@@ -216,7 +234,12 @@ function mergeBracketData(mapA, mapB) {
         brackets: new Map(
           [...cdB.brackets.entries()].map(([b, brB]) => [
             b,
-            { ticksPerHour: [...brB.ticksPerHour], firstTick: brB.firstTick },
+            {
+              ticksPerHour: [...brB.ticksPerHour],
+              firstTick: brB.firstTick,
+              firstPricePerHour: [...brB.firstPricePerHour],
+              firstCapturedAtPerHour: [...brB.firstCapturedAtPerHour],
+            },
           ])
         ),
       });
@@ -228,12 +251,23 @@ function mergeBracketData(mapA, mapB) {
         cdM.brackets.set(b, {
           ticksPerHour: [...brB.ticksPerHour],
           firstTick: brB.firstTick,
+          firstPricePerHour: [...brB.firstPricePerHour],
+          firstCapturedAtPerHour: [...brB.firstCapturedAtPerHour],
         });
       } else {
         const brM = cdM.brackets.get(b);
-        // Sum tick counts per hour bucket
+        // Sum tick counts per hour bucket; keep earlier first price per hour
         for (let i = 0; i < NUM_HOUR_BUCKETS; i++) {
           brM.ticksPerHour[i] += brB.ticksPerHour[i];
+          // Keep the earlier captured_at price for each hour bucket
+          if (
+            brB.firstCapturedAtPerHour[i] !== null &&
+            (brM.firstCapturedAtPerHour[i] === null ||
+              brB.firstCapturedAtPerHour[i] < brM.firstCapturedAtPerHour[i])
+          ) {
+            brM.firstCapturedAtPerHour[i] = brB.firstCapturedAtPerHour[i];
+            brM.firstPricePerHour[i] = brB.firstPricePerHour[i];
+          }
         }
         // Keep earlier first tick across both collections
         if (
@@ -287,6 +321,20 @@ function buildFeatureDocs(bracketData, winners, method, computedAt) {
         .map(([b]) => [b, cumByBracket.get(b)[n]])
         .sort((a, b) => b[1] - a[1]);
       rankAtHour.push(sorted);
+    }
+
+    // Compute normalised lead margin per hour for this city-day.
+    // lead_margin[n] = (rank1_ticks - rank2_ticks) / total_ticks_through_n
+    // This is a city-day level signal (same value for every bracket on that day).
+    const leadMarginThroughHour = new Array(NUM_HOUR_BUCKETS).fill(0);
+    for (let n = 0; n < NUM_HOUR_BUCKETS; n++) {
+      const sorted = rankAtHour[n];
+      if (sorted.length === 0) continue;
+      const totalTicks = sorted.reduce((s, [, c]) => s + c, 0);
+      if (totalTicks === 0) continue;
+      const rank1Count = sorted[0][1];
+      const rank2Count = sorted.length > 1 ? sorted[1][1] : 0;
+      leadMarginThroughHour[n] = (rank1Count - rank2Count) / totalTicks;
     }
 
     for (const [bracket, br] of bracketsArr) {
@@ -343,6 +391,11 @@ function buildFeatureDocs(bracketData, winners, method, computedAt) {
         tick_count_through_hour: tickCountThroughHour,
         rank_through_hour: rankThroughHour,
         is_leader_through_hour: isLeaderThroughHour,
+        // First yes_price_cents seen within each hour bucket for this bracket
+        price_at_hour: br.firstPricePerHour,
+        // Normalised leader gap: (rank1_ticks - rank2_ticks) / total_ticks per hour
+        // Same for every bracket on the same city-day — measures market decisiveness
+        lead_margin_through_hour: leadMarginThroughHour,
         final_tick_count: tickCountThroughHour[NUM_HOUR_BUCKETS - 1],
         final_rank: rankThroughHour[NUM_HOUR_BUCKETS - 1],
         resolved,

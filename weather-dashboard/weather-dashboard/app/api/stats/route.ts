@@ -43,6 +43,9 @@ const CONFIG_KEY_MAP: Record<string, string> = {
   leader: "n",
   rank_at_hour: "n",
   price: "width",
+  price_at_hour: "n",
+  lead_margin: "n",
+  rank_trend: "n",
 };
 
 function parseDimensions(byParam: string | null): DimensionSpec[] {
