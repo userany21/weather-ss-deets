@@ -63,6 +63,43 @@ type SortCol = "avg_edge_cents" | "win_rate" | "count" | "resolved";
 type SortDir = "desc" | "asc";
 
 // ---------------------------------------------------------------------------
+// Scanner types
+// ---------------------------------------------------------------------------
+
+interface PinnedCriteria {
+  /** Composite bucket key, e.g. "lm:4:moderate|rt:4:rising" */
+  key: string;
+  /** Human-readable label */
+  label: string;
+  /** Snapshot of activeDims at pin time */
+  dims: ActiveDim[];
+  /** Snapshot of method filter at pin time */
+  method: string;
+}
+
+interface ScanMatch {
+  city: string;
+  bracket: string;
+  local_date: string;
+  local_time: string;
+  tick_count: number;
+  lead_margin_pct: number | null;
+  rank_now: number | null;
+  rank_prev: number | null;
+}
+
+interface ScanResponse {
+  scanned_at: string;
+  criteria_label: string;
+  criteria_key: string;
+  method: string;
+  cities_scanned: string[];
+  match_count: number;
+  matches: ScanMatch[];
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Constants / statics
 // ---------------------------------------------------------------------------
 
@@ -82,6 +119,16 @@ const MAX_CHART_BUCKETS = 30;
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
+/** Serialise ActiveDim[] to the "by" URL param format, e.g. "lead_margin:4,rank_trend:4" */
+function dimsToByParam(dims: ActiveDim[]): string {
+  return dims
+    .map((d) => {
+      const entries = Object.entries(d.config);
+      return entries.length ? `${d.id}:${entries[0][1]}` : d.id;
+    })
+    .join(",");
+}
+
 function buildApiUrl(
   dims: ActiveDim[],
   cities: string[],
@@ -94,15 +141,7 @@ function buildApiUrl(
   const params = new URLSearchParams();
 
   if (dims.length > 0) {
-    params.set(
-      "by",
-      dims
-        .map((d) => {
-          const entries = Object.entries(d.config);
-          return entries.length ? `${d.id}:${entries[0][1]}` : d.id;
-        })
-        .join(",")
-    );
+    params.set("by", dimsToByParam(dims));
   }
 
   if (cities.length > 0) params.set("city", cities.join(","));
@@ -199,6 +238,12 @@ export default function StatsExplorerPage() {
   const [sortCol, setSortCol] = useState<SortCol>("avg_edge_cents");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
+  // ---- Live scanner state ----
+  const [pinnedCriteria, setPinnedCriteria] = useState<PinnedCriteria[]>([]);
+  const [scanResults, setScanResults] = useState<Record<string, ScanResponse>>({});
+  const [isScanning, setIsScanning] = useState(false);
+  const [lastScanTime, setLastScanTime] = useState<string | null>(null);
+
   // ---- SWR data fetch ----
   const apiUrl = useMemo(
     () =>
@@ -261,6 +306,56 @@ export default function StatsExplorerPage() {
       setSortDir("desc");
     }
   }
+
+  // ---- Scanner handlers ----
+  const pinRow = useCallback(
+    (b: Bucket) => {
+      setPinnedCriteria((prev) => {
+        if (prev.some((p) => p.key === b.key)) return prev;
+        return [
+          ...prev,
+          { key: b.key, label: b.label, dims: [...activeDims], method },
+        ];
+      });
+    },
+    [activeDims, method]
+  );
+
+  const unpinRow = useCallback((key: string) => {
+    setPinnedCriteria((prev) => prev.filter((p) => p.key !== key));
+    setScanResults((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const runScan = useCallback(async () => {
+    if (pinnedCriteria.length === 0) return;
+    setIsScanning(true);
+    try {
+      const citiesToScan =
+        selectedCities.length > 0 ? selectedCities : ALL_CITIES;
+      const results = await Promise.all(
+        pinnedCriteria.map(async (criteria) => {
+          const params = new URLSearchParams();
+          params.set("by", dimsToByParam(criteria.dims));
+          params.set("criteriaKey", criteria.key);
+          params.set("cities", citiesToScan.join(","));
+          params.set("method", criteria.method);
+          const res = await fetch(`/api/scan?${params.toString()}`);
+          const data: ScanResponse = await res.json();
+          return [criteria.key, data] as [string, ScanResponse];
+        })
+      );
+      setScanResults(Object.fromEntries(results));
+      setLastScanTime(new Date().toLocaleTimeString());
+    } catch {
+      // errors are shown per-criteria via ScanResponse.error
+    } finally {
+      setIsScanning(false);
+    }
+  }, [pinnedCriteria, selectedCities]);
 
   // ---- Derived display data ----
   const sortedBuckets = useMemo(
@@ -694,13 +789,27 @@ export default function StatsExplorerPage() {
                     b.avg_edge_cents != null && b.avg_edge_cents > 0;
                   const edgeNegative =
                     b.avg_edge_cents != null && b.avg_edge_cents < 0;
+                  const isPinned = pinnedCriteria.some((p) => p.key === b.key);
                   return (
                     <tr
                       key={b.key}
                       className="border-t border-border hover:bg-panel/60 transition-colors"
                     >
-                      <td className="px-3 py-2 text-text font-mono text-xs">
-                        {b.label}
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => isPinned ? unpinRow(b.key) : pinRow(b)}
+                            title={isPinned ? "Remove from scanner" : "Pin for live scan"}
+                            className={`text-sm shrink-0 leading-none transition-colors ${
+                              isPinned
+                                ? "text-good"
+                                : "text-subtext hover:text-good"
+                            }`}
+                          >
+                            {isPinned ? "◉" : "○"}
+                          </button>
+                          <span className="font-mono text-text text-xs">{b.label}</span>
+                        </div>
                       </td>
                       <td className="px-3 py-2 text-right text-subtext">
                         {b.count.toLocaleString()}
@@ -728,6 +837,153 @@ export default function StatsExplorerPage() {
               </tbody>
             </table>
           </div>
+
+          {/* ---- Live Opportunity Scanner panel ---- */}
+          {pinnedCriteria.length > 0 && (
+            <div className="card">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-subtext text-xs uppercase tracking-wide">
+                  Live Opportunity Scanner
+                </div>
+                <div className="flex items-center gap-3">
+                  {lastScanTime && (
+                    <span className="text-subtext text-xs">
+                      Last scan: {lastScanTime}
+                    </span>
+                  )}
+                  <button
+                    onClick={runScan}
+                    disabled={isScanning}
+                    className={`px-3 py-1 text-xs rounded border transition-colors ${
+                      isScanning
+                        ? "border-border text-subtext cursor-not-allowed"
+                        : "border-good text-good hover:bg-good/10"
+                    }`}
+                  >
+                    {isScanning ? "Scanning…" : "▶ Scan Now"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Pinned criteria chips */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                {pinnedCriteria.map((c) => (
+                  <div
+                    key={c.key}
+                    className="inline-flex items-center gap-1.5 border border-good/40 bg-good/10 rounded px-2 py-1 text-xs"
+                  >
+                    <span className="text-subtext capitalize">
+                      {c.method}:
+                    </span>
+                    <span className="text-text font-mono">{c.label}</span>
+                    <button
+                      onClick={() => unpinRow(c.key)}
+                      className="text-subtext hover:text-text ml-1 leading-none"
+                      title="Remove"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Help text when scan hasn't run yet */}
+              {Object.keys(scanResults).length === 0 && !isScanning && (
+                <div className="text-subtext text-xs">
+                  {selectedCities.length > 0
+                    ? `Will scan ${selectedCities.length} selected city${selectedCities.length !== 1 ? "ies" : ""}. Click ▶ Scan Now to check today's live data.`
+                    : `Will scan all cities. Select specific cities in the panel above to narrow scope.`}
+                </div>
+              )}
+
+              {/* Results per criteria */}
+              <div className="space-y-5">
+                {pinnedCriteria.map((c) => {
+                  const result = scanResults[c.key];
+                  if (!result) return null;
+
+                  if (result.error) {
+                    return (
+                      <div key={c.key} className="text-temp text-xs">
+                        Error scanning {c.label}: {result.error}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={c.key}>
+                      {/* Per-criteria sub-header */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <span
+                          className={`text-xs font-mono font-semibold ${
+                            result.match_count > 0 ? "text-good" : "text-subtext"
+                          }`}
+                        >
+                          {result.match_count} match
+                          {result.match_count !== 1 ? "es" : ""}
+                        </span>
+                        <span className="text-subtext text-xs">
+                          · {result.cities_scanned.length} cities scanned
+                        </span>
+                        <span className="text-subtext text-xs">
+                          · {new Date(result.scanned_at).toLocaleTimeString()}
+                        </span>
+                      </div>
+
+                      {result.matches.length === 0 ? (
+                        <div className="text-subtext text-xs">
+                          No cities match this criteria right now.
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {result.matches.map((m) => {
+                            const trendArrow =
+                              m.rank_now != null && m.rank_prev != null
+                                ? m.rank_now < m.rank_prev
+                                  ? "↑"
+                                  : m.rank_now > m.rank_prev
+                                  ? "↓"
+                                  : "→"
+                                : null;
+                            return (
+                              <div
+                                key={`${m.city}|${m.bracket}`}
+                                className="border border-good/30 bg-good/10 rounded px-3 py-2 text-xs min-w-36"
+                              >
+                                <div className="font-semibold text-text capitalize">
+                                  {m.city}
+                                </div>
+                                <div className="text-price font-mono">
+                                  {m.bracket}
+                                </div>
+                                <div className="text-subtext mt-1">
+                                  {m.local_time} · {m.tick_count}T
+                                </div>
+                                {m.lead_margin_pct != null && (
+                                  <div className="text-good">
+                                    Margin: {m.lead_margin_pct.toFixed(1)}%
+                                  </div>
+                                )}
+                                {m.rank_now != null &&
+                                  m.rank_prev != null &&
+                                  trendArrow && (
+                                    <div className="text-price">
+                                      Rank {m.rank_prev}→{m.rank_now}{" "}
+                                      {trendArrow}
+                                    </div>
+                                  )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
