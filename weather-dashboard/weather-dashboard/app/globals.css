@@ -13,3 +13,21 @@ a {
 .card {
   @apply bg-panel border border-border rounded-lg p-4 hover:border-price transition-colors;
 }
+
+/* ── City Clock Widget ── */
+@keyframes city-clock-scroll {
+  /* Scrolls the duplicated 6-section track upward by exactly half its height
+     (= 3 visible sections), then snaps back — creating a seamless infinite loop. */
+  from { transform: translateY(0); }
+  to   { transform: translateY(-50%); }
+}
+
+.city-clock-track {
+  /* 30 s = 10 s per section pass — visible but unhurried */
+  animation: city-clock-scroll 30s linear infinite;
+}
+
+/* Pause on hover so the user can comfortably read the times */
+.city-clock-track:hover {
+  animation-play-state: paused;
+}

@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import Link from "next/link";
+import CityClockWidget from "@/components/CityClockWidget";
 
 export const metadata: Metadata = {
   title: "Weather Dashboard",
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </Link>
         </header>
         <main className="p-6">{children}</main>
+        <CityClockWidget />
       </body>
     </html>
   );
