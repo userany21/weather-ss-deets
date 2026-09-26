@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import TempChart from "@/components/TempChart";
@@ -33,6 +33,12 @@ interface PriceHistoryResponse {
   tzOffsetMs: number;
 }
 
+interface CityStats {
+  avgTicksPerDay: number | null;
+  totalDays: number;
+  dates: string[];
+}
+
 export default function DayPage({
   params,
 }: {
@@ -50,8 +56,8 @@ export default function DayPage({
     refreshInterval: isToday ? 5 * 60_000 : 0,
   });
 
-  // City-level stats (avg ticks/day) — static, no refresh needed.
-  const { data: cityStats } = useSWR<{ avgTicksPerDay: number | null; totalDays: number }>(
+  // City-level stats (avg ticks/day + full dates list) — static, no refresh needed.
+  const { data: cityStats } = useSWR<CityStats>(
     `/api/dates/${encodeURIComponent(cityDecoded)}`,
     fetcher,
     { revalidateOnFocus: false }
@@ -75,6 +81,31 @@ export default function DayPage({
     }
   });
 
+  // ── Date picker ────────────────────────────────────────────────────────────
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const activeItemRef = useRef<HTMLAnchorElement>(null);
+
+  // Close when clicking outside the picker
+  useEffect(() => {
+    if (!pickerOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setPickerOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [pickerOpen]);
+
+  // Scroll the active date into view when the picker opens
+  useEffect(() => {
+    if (pickerOpen && activeItemRef.current) {
+      activeItemRef.current.scrollIntoView({ block: "nearest" });
+    }
+  }, [pickerOpen]);
+
+  // ── Window stats ───────────────────────────────────────────────────────────
   const windowStats = useMemo(() => {
     if (!data?.ticks?.length) return null;
 
@@ -143,14 +174,63 @@ export default function DayPage({
         </Link>{" "}
         / {params.date}
       </div>
-      <h1 className="text-xl font-semibold mb-1 capitalize">
-        {cityDecoded} — {params.date}
-        {isToday && <span className="ml-2 text-live text-sm align-middle">● updating live</span>}
+
+      <h1 className="text-xl font-semibold mb-1 capitalize flex items-center gap-2 flex-wrap">
+        {cityDecoded} —{" "}
+
+        {/* Clickable date with dropdown picker */}
+        <span className="relative" ref={pickerRef}>
+          <button
+            onClick={() => setPickerOpen((v) => !v)}
+            className="text-price underline decoration-dotted underline-offset-2 cursor-pointer hover:opacity-75 transition-opacity"
+            aria-haspopup="listbox"
+            aria-expanded={pickerOpen}
+          >
+            {params.date}
+          </button>
+
+          {pickerOpen && (
+            <div
+              role="listbox"
+              className="absolute left-0 top-full mt-1 z-50 min-w-[9rem] max-h-64 overflow-y-auto rounded-lg border border-border bg-panel shadow-2xl"
+            >
+              {(cityStats?.dates ?? []).length === 0 && (
+                <div className="px-3 py-2 text-sm text-subtext">No dates</div>
+              )}
+              {(cityStats?.dates ?? []).map((d) => {
+                const isActive = d === params.date;
+                return (
+                  <Link
+                    key={d}
+                    href={`/${params.region}/${encodeURIComponent(cityDecoded)}/${d}`}
+                    role="option"
+                    aria-selected={isActive}
+                    ref={isActive ? activeItemRef : undefined}
+                    onClick={() => setPickerOpen(false)}
+                    className={[
+                      "block px-3 py-1.5 text-sm transition-colors",
+                      isActive
+                        ? "text-price font-semibold bg-[#1a2030]"
+                        : "text-text hover:bg-[#1e2229]",
+                    ].join(" ")}
+                  >
+                    {d}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </span>
+
+        {isToday && (
+          <span className="text-live text-sm font-normal">● Updating Live</span>
+        )}
       </h1>
+
       {cityStats?.avgTicksPerDay != null && (
         <div className="text-sm text-subtext mb-4">
           avg{" "}
-          <span className="text-accent font-medium">{cityStats.avgTicksPerDay.toFixed(1)}</span>
+          <span className="text-price font-medium">{cityStats.avgTicksPerDay.toFixed(1)}</span>
           {" "}ticks/day
           <span className="ml-1 opacity-50">({cityStats.totalDays}d)</span>
         </div>
@@ -178,10 +258,10 @@ export default function DayPage({
           <section>
             <h2 className="text-sm text-subtext mb-2">Market price over the day</h2>
             <PriceChart
-                ticks={data.ticks}
-                bracketHistories={priceHistoryData?.brackets ?? []}
-                tzOffsetMs={priceHistoryData?.tzOffsetMs ?? 0}
-              />
+              ticks={data.ticks}
+              bracketHistories={priceHistoryData?.brackets ?? []}
+              tzOffsetMs={priceHistoryData?.tzOffsetMs ?? 0}
+            />
           </section>
         </div>
       )}

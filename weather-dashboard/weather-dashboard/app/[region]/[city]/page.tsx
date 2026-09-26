@@ -1,49 +1,11 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import Link from "next/link";
-import useSWR from "swr";
-
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
-
-export default function CityPage({ params }: { params: { region: string; city: string } }) {
-  const cityDecoded = decodeURIComponent(params.city);
-  const { data, isLoading } = useSWR(`/api/dates/${encodeURIComponent(cityDecoded)}`, fetcher);
-
-  const avgTicks: number | null = data?.avgTicksPerDay ?? null;
-  const totalDays: number = data?.totalDays ?? 0;
-
-  return (
-    <div>
-      <div className="text-subtext text-sm mb-2">
-        <Link href="/">Regions</Link> / <Link href={`/${params.region}`} className="capitalize">{params.region}</Link> /{" "}
-        <span className="capitalize">{cityDecoded}</span>
-      </div>
-      <div className="flex items-baseline gap-4 mb-4">
-        <h1 className="text-xl font-semibold capitalize">{cityDecoded} — dates</h1>
-        {avgTicks !== null && (
-          <span className="text-sm text-subtext">
-            avg{" "}
-            <span className="text-accent font-medium">{avgTicks.toFixed(1)}</span>
-            {" "}ticks/day
-            <span className="ml-1 opacity-50">({totalDays}d)</span>
-          </span>
-        )}
-      </div>
-
-      {isLoading && <div className="text-subtext">Loading…</div>}
-      {data?.dates?.length === 0 && <div className="text-subtext">No ticks recorded for this city yet.</div>}
-
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 max-w-3xl">
-        {data?.dates?.map((date: string) => (
-          <Link
-            key={date}
-            href={`/${params.region}/${encodeURIComponent(cityDecoded)}/${date}`}
-            className="card text-center"
-          >
-            {date}
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
+export default function CityPage({
+  params,
+}: {
+  params: { region: string; city: string };
+}) {
+  // Skip the dates grid — go straight to today's data.
+  const today = new Date().toISOString().slice(0, 10);
+  redirect(`/${params.region}/${params.city}/${today}`);
 }
