@@ -121,6 +121,46 @@ function buildSnapMap(
 }
 
 // ---------------------------------------------------------------------------
+// Custom tooltip — shows only the top 4 brackets by price at hover time
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function Top4Tooltip({ active, payload, label, tzOffsetMs }: any) {
+  if (!active || !payload?.length) return null;
+
+  // Sort all brackets by price descending, keep top 4
+  const top4 = [...payload]
+    .filter((p) => p.value != null)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 4);
+
+  if (top4.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        background: "#14171c",
+        border: "1px solid #22262d",
+        borderRadius: 6,
+        padding: "8px 12px",
+        fontSize: 13,
+        minWidth: 140,
+      }}
+    >
+      <div style={{ color: "#8b92a0", marginBottom: 6, fontSize: 12 }}>
+        {formatClock(label, tzOffsetMs)}
+      </div>
+      {top4.map((p) => (
+        <div key={p.dataKey} style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 2 }}>
+          <span style={{ color: p.color, fontWeight: 600 }}>{p.dataKey}</span>
+          <span style={{ color: "#e5e7eb", fontFamily: "monospace" }}>{(p.value as number).toFixed(1)}¢</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Custom dot — renders a visible dot + rotated label ONLY at snap points,
 // invisible otherwise (r=0 circle so recharts still lays out correctly).
 // ---------------------------------------------------------------------------
@@ -349,9 +389,7 @@ function FullChart({
               label={{ value: "Yes price (cents)", angle: -90, position: "insideLeft", fill: "#8b92a0" }}
             />
             <Tooltip
-              labelFormatter={(v: number) => formatClockLocal(v)}
-              contentStyle={{ background: "#14171c", border: "1px solid #22262d" }}
-              formatter={(v: number, name: string) => [`${v.toFixed(1)}¢`, name]}
+              content={(props) => <Top4Tooltip {...props} tzOffsetMs={tzOffsetMs} />}
             />
             <Legend
               wrapperStyle={{ fontSize: 10, color: "#8b92a0", paddingTop: 4 }}

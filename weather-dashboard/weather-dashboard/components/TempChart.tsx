@@ -75,6 +75,9 @@ export default function TempChart({
   }
   data.sort((a, b) => a.paced_at - b.paced_at);
 
+  // One X-axis tick per distinct pacing time in the merged dataset
+  const xTicks = [...new Set(data.map((d) => d.paced_at))].sort((a, b) => a - b);
+
   // Count bracket hits per dataset
   function countByBracket(ts: EnrichedTick[]) {
     const counts = new Map<string, number>();
@@ -100,9 +103,14 @@ export default function TempChart({
             dataKey="paced_at"
             type="number"
             domain={["dataMin", "dataMax"]}
+            ticks={xTicks}
+            interval={0}
             tickFormatter={formatClock}
             stroke="#8b92a0"
-            fontSize={12}
+            fontSize={11}
+            angle={-40}
+            textAnchor="end"
+            height={55}
           />
           <YAxis
             stroke="#8b92a0"
