@@ -1,7 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import TopNav from "@/components/TopNav";
-import CityClockWidget from "@/components/CityClockWidget";
 
 export const metadata: Metadata = {
   title: "Weather Dashboard",
@@ -14,7 +13,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="bg-bg text-text min-h-screen">
         <TopNav />
         <main className="p-6">{children}</main>
-        <CityClockWidget />
       </body>
     </html>
   );
