@@ -1,6 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import Link from "next/link";
+import TopNav from "@/components/TopNav";
 import CityClockWidget from "@/components/CityClockWidget";
 
 export const metadata: Metadata = {
@@ -12,17 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="dark">
       <body className="bg-bg text-text min-h-screen">
-        <header className="border-b border-border px-6 py-4 flex items-center gap-6">
-          <Link href="/" className="font-semibold">
-            Weather Dashboard
-          </Link>
-          <Link href="/live" className="text-live text-sm font-medium">
-            ● Live now
-          </Link>
-          <Link href="/stats" className="text-subtext text-sm font-medium hover:text-text transition-colors">
-            Stats Explorer
-          </Link>
-        </header>
+        <TopNav />
         <main className="p-6">{children}</main>
         <CityClockWidget />
       </body>

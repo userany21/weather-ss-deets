@@ -3,11 +3,16 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import useSWR from "swr";
+import Card from "@/components/Card";
 import TempChart from "@/components/TempChart";
-import PriceChart, { type BracketHistory } from "@/components/PriceChart";
+import StatsTable from "@/components/StatsTable";
+import PriceChart, { LatestUpdates, type BracketHistory } from "@/components/PriceChart";
+import LocalTimesPanel from "@/components/LocalTimesPanel";
+import { BarChartIcon, CloudIcon, InfoIcon, PinIcon } from "@/components/icons";
 import type { EnrichedTick } from "@/lib/weather-transform";
 import { fallbackBracketLabel } from "@/lib/weather-transform";
 import { useWeatherStream } from "@/lib/useWeatherStream";
+import { C } from "@/lib/theme";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -51,20 +56,18 @@ export default function DayPage({
   const key = `/api/day/${encodeURIComponent(cityDecoded)}/${params.date}`;
 
   const { data, isLoading, mutate } = useSWR<DayResponse>(key, fetcher, {
-    // Backstop only — the real trigger is the SSE stream below. Covers the
-    // rare case a stream event gets dropped.
+    // Backstop only — the real trigger is the SSE stream below.
     refreshInterval: isToday ? 5 * 60_000 : 0,
   });
 
-  // City-level stats (avg ticks/day + full dates list) — static, no refresh needed.
+  // City-level stats (avg ticks/day + full dates list) — static.
   const { data: cityStats } = useSWR<CityStats>(
     `/api/dates/${encodeURIComponent(cityDecoded)}`,
     fetcher,
     { revalidateOnFocus: false }
   );
 
-  // Polymarket price histories — loaded after tick data arrives so we have
-  // city + date confirmed. Refreshes every 5 min for today; static for past.
+  // Polymarket price histories — loaded after tick data arrives.
   const { data: priceHistoryData } = useSWR<PriceHistoryResponse>(
     data
       ? `/api/prices-history/${encodeURIComponent(cityDecoded)}/${params.date}`
@@ -73,8 +76,7 @@ export default function DayPage({
     { refreshInterval: isToday ? 5 * 60_000 : 0, revalidateOnFocus: false }
   );
 
-  // Refetch the instant a new tick for this exact city/date lands, instead
-  // of waiting for the next poll.
+  // Refetch the instant a new tick for this exact city/date lands.
   useWeatherStream((evt) => {
     if (isToday && evt.city === cityDecoded.toLowerCase() && evt.local_date === params.date) {
       mutate();
@@ -86,7 +88,6 @@ export default function DayPage({
   const pickerRef = useRef<HTMLDivElement>(null);
   const activeItemRef = useRef<HTMLAnchorElement>(null);
 
-  // Close when clicking outside the picker
   useEffect(() => {
     if (!pickerOpen) return;
     function onPointerDown(e: PointerEvent) {
@@ -98,7 +99,6 @@ export default function DayPage({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [pickerOpen]);
 
-  // Scroll the active date into view when the picker opens
   useEffect(() => {
     if (pickerOpen && activeItemRef.current) {
       activeItemRef.current.scrollIntoView({ block: "nearest" });
@@ -110,10 +110,9 @@ export default function DayPage({
     if (!data?.ticks?.length) return null;
 
     // Anchor to the latest paced_at in the dataset, not Date.now().
-    // Works the same whether it's today's live-streaming data or a past static day.
     const anchor = Math.max(
-      ...data.ticks.map(t => t.paced_at ?? 0),
-      ...(data.reciprocalTicks ?? []).map(t => t.paced_at ?? 0)
+      ...data.ticks.map((t) => t.paced_at ?? 0),
+      ...(data.reciprocalTicks ?? []).map((t) => t.paced_at ?? 0)
     );
 
     const windows = [
@@ -124,11 +123,11 @@ export default function DayPage({
 
     return windows.map(({ label, ms }) => {
       const cutoff = anchor - ms;
-      const linear = data.ticks.filter(t => (t.paced_at ?? 0) >= cutoff);
-      const reciprocal = (data.reciprocalTicks ?? []).filter(t => (t.paced_at ?? 0) >= cutoff);
+      const linear = data.ticks.filter((t) => (t.paced_at ?? 0) >= cutoff);
+      const reciprocal = (data.reciprocalTicks ?? []).filter((t) => (t.paced_at ?? 0) >= cutoff);
 
-      const linearAvg = avg(linear.map(t => t.weighted_avg));
-      const reciprocalAvg = avg(reciprocal.map(t => t.weighted_avg));
+      const linearAvg = avg(linear.map((t) => t.weighted_avg));
+      const reciprocalAvg = avg(reciprocal.map((t) => t.weighted_avg));
 
       // Derive brackets independently from each collection's window average.
       const linearBracket =
@@ -136,16 +135,16 @@ export default function DayPage({
       const recBracket =
         reciprocalAvg != null ? fallbackBracketLabel(reciprocalAvg, data.unit) : null;
 
-      // Yes price: most recent tick whose bracket matches the collection's
-      // window bracket — so each price reflects the actual contract it refers to.
-      const matchingLinearTick = [...linear].reverse().find(
-        t => t.point_bracket === linearBracket
-      );
-      const lastYesPriceLinear = matchingLinearTick?.yes_price ?? linear.at(-1)?.yes_price ?? null;
+      // Yes price: most recent tick whose bracket matches the window bracket.
+      const matchingLinearTick = [...linear]
+        .reverse()
+        .find((t) => t.point_bracket === linearBracket);
+      const lastYesPriceLinear =
+        matchingLinearTick?.yes_price ?? linear.at(-1)?.yes_price ?? null;
 
-      const matchingRecTick = [...reciprocal].reverse().find(
-        t => t.point_bracket === recBracket
-      );
+      const matchingRecTick = [...reciprocal]
+        .reverse()
+        .find((t) => t.point_bracket === recBracket);
       const lastYesPriceRec = matchingRecTick?.yes_price ?? reciprocal.at(-1)?.yes_price ?? null;
 
       return {
@@ -156,115 +155,169 @@ export default function DayPage({
         reciprocalAvg,
         recBracket,
         lastYesPriceRec,
-        tickCount: linear.length
+        tickCount: linear.length,
       };
     });
   }, [data?.ticks, data?.reciprocalTicks]);
 
+  const hasTicks = !!data && data.ticks.length > 0;
+  const brackets = priceHistoryData?.brackets ?? [];
+  const tzOffsetMs = priceHistoryData?.tzOffsetMs ?? 0;
+
   return (
-    <div>
-      <div className="text-subtext text-sm mb-2">
-        <Link href="/">Regions</Link> /{" "}
-        <Link href={`/${params.region}`} className="capitalize">
-          {params.region}
-        </Link>{" "}
-        /{" "}
-        <Link href={`/${params.region}/${encodeURIComponent(cityDecoded)}`} className="capitalize">
-          {cityDecoded}
-        </Link>{" "}
-        / {params.date}
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_13rem]">
+      <div className="min-w-0 space-y-4">
+        {/* ── Row 1: forecast chart + window stats ─────────────────────── */}
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,2.1fr)_minmax(0,1fr)]">
+          <Card className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <nav className="text-sm text-[#8b92a0]">
+                <Link href="/" className="hover:text-white">
+                  Regions
+                </Link>{" "}
+                /{" "}
+                <Link href={`/${params.region}`} className="capitalize hover:text-white">
+                  {params.region}
+                </Link>{" "}
+                /{" "}
+                <Link
+                  href={`/${params.region}/${encodeURIComponent(cityDecoded)}`}
+                  className="font-medium capitalize text-white"
+                >
+                  {cityDecoded}
+                </Link>
+              </nav>
+
+              <div className="flex items-center gap-2 text-sm text-[#8b92a0]">
+                <CloudIcon width={16} height={16} />
+                <span>Forecast temp over the day</span>
+                <span title="Weighted-average forecast temperature at each tick, linear vs reciprocal weighting. The green band is the winning bucket.">
+                  <InfoIcon width={15} height={15} />
+                </span>
+              </div>
+            </div>
+
+            <h1 className="mt-4 flex items-center gap-3 text-[28px] font-semibold capitalize leading-none text-white">
+              <PinIcon width={24} height={24} className="text-[#8b92a0]" />
+              {cityDecoded}
+            </h1>
+
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-[#8b92a0]">
+              {cityStats?.avgTicksPerDay != null && (
+                <span>
+                  avg{" "}
+                  <span className="font-semibold" style={{ color: C.cyan }}>
+                    {cityStats.avgTicksPerDay.toFixed(1)}
+                  </span>{" "}
+                  ticks/day ({cityStats.totalDays}d)
+                </span>
+              )}
+
+              {/* Date picker */}
+              <div className="relative" ref={pickerRef}>
+                <button
+                  onClick={() => setPickerOpen((v) => !v)}
+                  className="flex cursor-pointer items-center gap-2 rounded-full border border-[#1f2838] px-3 py-1 text-xs text-[#c9d0dc] transition-colors hover:border-[#2c374b]"
+                  aria-haspopup="listbox"
+                  aria-expanded={pickerOpen}
+                >
+                  {isToday && (
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ background: C.green }}
+                      title="Updating live"
+                    />
+                  )}
+                  {params.date}
+                </button>
+
+                {pickerOpen && (
+                  <div
+                    role="listbox"
+                    className="absolute left-0 top-full z-50 mt-2 max-h-64 min-w-[9rem] overflow-y-auto rounded-xl border border-[#151c2b] bg-[#0a0f1a] shadow-2xl"
+                  >
+                    {(cityStats?.dates ?? []).length === 0 && (
+                      <div className="px-3 py-2 text-sm text-[#8b92a0]">No dates</div>
+                    )}
+                    {(cityStats?.dates ?? []).map((d) => {
+                      const isActive = d === params.date;
+                      return (
+                        <Link
+                          key={d}
+                          href={`/${params.region}/${encodeURIComponent(cityDecoded)}/${d}`}
+                          role="option"
+                          aria-selected={isActive}
+                          ref={isActive ? activeItemRef : undefined}
+                          onClick={() => setPickerOpen(false)}
+                          className={[
+                            "block px-3 py-1.5 text-sm transition-colors",
+                            isActive
+                              ? "bg-[#111a2a] font-semibold text-[#22bff0]"
+                              : "text-[#c9d0dc] hover:bg-[#111a2a]",
+                          ].join(" ")}
+                        >
+                          {d}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              {isLoading && <div className="text-[#8b92a0]">Loading…</div>}
+              {data && !hasTicks && (
+                <div className="text-[#8b92a0]">No ticks recorded for this city/date.</div>
+              )}
+              {data && hasTicks && (
+                <TempChart
+                  ticks={data.ticks}
+                  reciprocalTicks={data.reciprocalTicks ?? []}
+                  unit={data.unit}
+                  winningLow={data.winningLow}
+                  winningHigh={data.winningHigh}
+                  winningBracket={data.winningBracket}
+                />
+              )}
+            </div>
+          </Card>
+
+          <Card className="overflow-x-auto p-4">
+            {data && hasTicks && (
+              <StatsTable
+                ticks={data.ticks}
+                reciprocalTicks={data.reciprocalTicks ?? []}
+                unit={data.unit}
+                windowStats={windowStats ?? undefined}
+              />
+            )}
+          </Card>
+        </div>
+
+        {/* ── Row 2: market price + latest updates ─────────────────────── */}
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,2.35fr)_minmax(0,1fr)]">
+          <Card className="p-5">
+            <h2 className="mb-4 flex items-center gap-3 text-base font-semibold text-white">
+              <BarChartIcon width={22} height={22} className="text-[#3b8bf5]" />
+              Market price over the day
+            </h2>
+            {data && hasTicks && (
+              <PriceChart ticks={data.ticks} bracketHistories={brackets} tzOffsetMs={tzOffsetMs} />
+            )}
+          </Card>
+
+          <Card className="p-5">
+            {brackets.length > 0 ? (
+              <LatestUpdates bracketHistories={brackets} tzOffsetMs={tzOffsetMs} />
+            ) : (
+              <div className="text-sm text-[#8b92a0]">No price updates yet.</div>
+            )}
+          </Card>
+        </div>
       </div>
 
-      <h1 className="text-xl font-semibold mb-1 capitalize flex items-center gap-2 flex-wrap">
-        {cityDecoded} —{" "}
-
-        {/* Clickable date with dropdown picker */}
-        <span className="relative" ref={pickerRef}>
-          <button
-            onClick={() => setPickerOpen((v) => !v)}
-            className="text-price underline decoration-dotted underline-offset-2 cursor-pointer hover:opacity-75 transition-opacity"
-            aria-haspopup="listbox"
-            aria-expanded={pickerOpen}
-          >
-            {params.date}
-          </button>
-
-          {pickerOpen && (
-            <div
-              role="listbox"
-              className="absolute left-0 top-full mt-1 z-50 min-w-[9rem] max-h-64 overflow-y-auto rounded-lg border border-border bg-panel shadow-2xl"
-            >
-              {(cityStats?.dates ?? []).length === 0 && (
-                <div className="px-3 py-2 text-sm text-subtext">No dates</div>
-              )}
-              {(cityStats?.dates ?? []).map((d) => {
-                const isActive = d === params.date;
-                return (
-                  <Link
-                    key={d}
-                    href={`/${params.region}/${encodeURIComponent(cityDecoded)}/${d}`}
-                    role="option"
-                    aria-selected={isActive}
-                    ref={isActive ? activeItemRef : undefined}
-                    onClick={() => setPickerOpen(false)}
-                    className={[
-                      "block px-3 py-1.5 text-sm transition-colors",
-                      isActive
-                        ? "text-price font-semibold bg-[#1a2030]"
-                        : "text-text hover:bg-[#1e2229]",
-                    ].join(" ")}
-                  >
-                    {d}
-                  </Link>
-                );
-              })}
-            </div>
-          )}
-        </span>
-
-        {isToday && (
-          <span className="text-live text-sm font-normal">● Updating Live</span>
-        )}
-      </h1>
-
-      {cityStats?.avgTicksPerDay != null && (
-        <div className="text-sm text-subtext mb-4">
-          avg{" "}
-          <span className="text-price font-medium">{cityStats.avgTicksPerDay.toFixed(1)}</span>
-          {" "}ticks/day
-          <span className="ml-1 opacity-50">({cityStats.totalDays}d)</span>
-        </div>
-      )}
-
-      {isLoading && <div className="text-subtext mt-4">Loading…</div>}
-      {data && data.ticks.length === 0 && (
-        <div className="text-subtext mt-4">No ticks recorded for this city/date.</div>
-      )}
-
-      {data && data.ticks.length > 0 && (
-        <div className="mt-6 space-y-8 max-w-7xl">
-          <section>
-            <h2 className="text-sm text-subtext mb-2">Forecast temp over the day</h2>
-            <TempChart
-              ticks={data.ticks}
-              reciprocalTicks={data.reciprocalTicks ?? []}
-              unit={data.unit}
-              winningLow={data.winningLow}
-              winningHigh={data.winningHigh}
-              winningBracket={data.winningBracket}
-              windowStats={windowStats ?? undefined}
-            />
-          </section>
-          <section>
-            <h2 className="text-sm text-subtext mb-2">Market price over the day</h2>
-            <PriceChart
-              ticks={data.ticks}
-              bracketHistories={priceHistoryData?.brackets ?? []}
-              tzOffsetMs={priceHistoryData?.tzOffsetMs ?? 0}
-            />
-          </section>
-        </div>
-      )}
+      <LocalTimesPanel />
     </div>
   );
 }

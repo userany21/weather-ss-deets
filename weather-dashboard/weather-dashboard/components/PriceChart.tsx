@@ -1,25 +1,26 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
-  LineChart,
-  Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ReferenceLine,
   ResponsiveContainer,
-  Legend,
 } from "recharts";
 import type { EnrichedTick } from "@/lib/weather-transform";
+import { ChevronIcon, ClipboardIcon } from "@/components/icons";
+import { C } from "@/lib/theme";
 
 // ---------------------------------------------------------------------------
 // Types (mirrors BracketResult from the API route)
 // ---------------------------------------------------------------------------
 
 export interface BracketHistory {
-  label: string;   // e.g. "68-69"
+  label: string; // e.g. "68-69"
   low: number;
   color: string;
   history: { t: number; p: number }[]; // t = unix seconds, p = 0–1
@@ -32,7 +33,6 @@ export interface BracketHistory {
 /**
  * Format a millisecond timestamp as a clock string.
  * `tzOffsetMs` shifts real UTC → local time before formatting.
- *   e.g. PDT offset = -25200000 → "11:46 PM UTC" becomes "4:46 PM"
  * Defaults to 0 (UTC) for the fallback chart whose paced_at values already
  * store local time expressed as UTC.
  */
@@ -46,11 +46,8 @@ function formatClock(ms: number, tzOffsetMs = 0) {
 }
 
 /**
- * Binary search over a time-ordered history array to find the entry whose
- * `t` (unix seconds) is closest to `targetMs` (milliseconds).
- *
- * O(log n) vs the previous O(n) linear scan. History is guaranteed sorted
- * ascending by t because the CLOB API always returns it that way.
+ * Binary search over a time-ordered history (t = unix seconds) to find the
+ * entry closest to `targetMs`. History is sorted ascending by the CLOB API.
  */
 function findClosest(
   history: { t: number; p: number }[],
@@ -60,36 +57,22 @@ function findClosest(
   let hi = history.length - 1;
 
   while (lo < hi) {
-    const mid = (lo + hi) >> 1; // fast integer divide by 2
-    if (history[mid].t * 1000 < targetMs) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
+    const mid = (lo + hi) >> 1;
+    if (history[mid].t * 1000 < targetMs) lo = mid + 1;
+    else hi = mid;
   }
 
-  // lo is the first entry >= targetMs; compare with lo-1 to find the true closest
   if (lo === 0) return history[0];
   const before = history[lo - 1];
-  const after  = history[lo];
+  const after = history[lo];
   return targetMs - before.t * 1000 <= after.t * 1000 - targetMs ? before : after;
 }
 
 /**
- * For each EnrichedTick with a paced_at + point_bracket, find the closest
- * timestamp in that bracket's price history and record it.
- *
- * `tzOffsetMs` is the UTC offset for the city's timezone on this date
- * (e.g. PDT = -25200000). It is used to convert `paced_at` (which stores
- * local time treated as UTC) into a real UTC millisecond timestamp before
- * comparing against Polymarket's price history (which uses real UTC).
- *
- *   paced_at stores "8:15 AM" as Date.UTC(date, 8, 15) — fake UTC
- *   real UTC for 8:15 AM PDT = paced_at - tzOffsetMs  (add 7h for PDT)
- *
- * Returns a Map keyed by  `"<bracketLabel>__<t_ms>"`  whose value is the
- * bracket label string (used by the custom dot renderer to decide whether
- * to show a labeled dot at that position).
+ * For each tick with a paced_at + point_bracket, find the closest timestamp in
+ * that bracket's price history. paced_at stores local time as fake UTC, so it
+ * is shifted by `tzOffsetMs` to real UTC before comparing.
+ * Returns a Map keyed by `"<bracketLabel>__<t_ms>"`.
  */
 function buildSnapMap(
   ticks: EnrichedTick[],
@@ -106,14 +89,8 @@ function buildSnapMap(
     const history = histMap.get(tick.point_bracket);
     if (!history?.length) continue;
 
-    // Convert fake-UTC paced_at → real UTC ms
     const realPacedAt = tick.paced_at - tzOffsetMs;
-
-    // Binary search — O(log n) instead of the previous O(n) linear scan
     const best = findClosest(history, realPacedAt);
-
-    // Only overwrite if this tick's bracket is the same (last tick wins for
-    // duplicate snaps on the same timestamp — rare edge case).
     snapMap.set(`${tick.point_bracket}__${best.t * 1000}`, tick.point_bracket);
   }
 
@@ -121,14 +98,13 @@ function buildSnapMap(
 }
 
 // ---------------------------------------------------------------------------
-// Custom tooltip — shows only the top 4 brackets by price at hover time
+// Custom tooltip — top 4 brackets by price at hover time
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function Top4Tooltip({ active, payload, label, tzOffsetMs }: any) {
   if (!active || !payload?.length) return null;
 
-  // Sort all brackets by price descending, keep top 4
   const top4 = [...payload]
     .filter((p) => p.value != null)
     .sort((a, b) => b.value - a.value)
@@ -139,21 +115,26 @@ function Top4Tooltip({ active, payload, label, tzOffsetMs }: any) {
   return (
     <div
       style={{
-        background: "#14171c",
-        border: "1px solid #22262d",
-        borderRadius: 6,
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
         padding: "8px 12px",
         fontSize: 13,
         minWidth: 140,
       }}
     >
-      <div style={{ color: "#8b92a0", marginBottom: 6, fontSize: 12 }}>
+      <div style={{ color: C.sub, marginBottom: 6, fontSize: 12 }}>
         {formatClock(label, tzOffsetMs)}
       </div>
       {top4.map((p) => (
-        <div key={p.dataKey} style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 2 }}>
+        <div
+          key={p.dataKey}
+          style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 2 }}
+        >
           <span style={{ color: p.color, fontWeight: 600 }}>{p.dataKey}</span>
-          <span style={{ color: "#e5e7eb", fontFamily: "monospace" }}>{(p.value as number).toFixed(1)}¢</span>
+          <span style={{ color: C.text, fontFamily: "monospace" }}>
+            {(p.value as number).toFixed(1)}¢
+          </span>
         </div>
       ))}
     </div>
@@ -161,8 +142,7 @@ function Top4Tooltip({ active, payload, label, tzOffsetMs }: any) {
 }
 
 // ---------------------------------------------------------------------------
-// Custom dot — renders a visible dot + rotated label ONLY at snap points,
-// invisible otherwise (r=0 circle so recharts still lays out correctly).
+// Custom dot — visible dot + rotated label ONLY at snap points
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -172,7 +152,6 @@ function makeSnapDot(bracketLabel: string, color: string, snapMap: Map<string, s
     const { cx, cy, payload } = props;
     const key = `${bracketLabel}__${payload?.t_ms}`;
     if (!snapMap.has(key)) {
-      // Invisible — still need a valid SVG element so recharts doesn't break
       return <circle r={0} cx={cx} cy={cy} key={key} />;
     }
     return (
@@ -193,13 +172,19 @@ function makeSnapDot(bracketLabel: string, color: string, snapMap: Map<string, s
   };
 }
 
+// Shared axis styling
+const axisProps = {
+  stroke: C.sub,
+  fontSize: 11,
+  tickLine: false,
+  axisLine: { stroke: C.axis },
+} as const;
+
 // ---------------------------------------------------------------------------
-// Fallback chart (no price history yet — mirrors original behaviour)
+// Fallback chart (no price history yet) — single blue area
 // ---------------------------------------------------------------------------
 
 function FallbackChart({ ticks }: { ticks: EnrichedTick[] }) {
-  // Memoised so filter+map+loop don't re-run on every parent render when
-  // `ticks` hasn't actually changed.
   const { data, switchTimes } = useMemo(() => {
     const data = ticks
       .filter((t) => t.paced_at !== null && t.yes_price !== null)
@@ -220,40 +205,47 @@ function FallbackChart({ ticks }: { ticks: EnrichedTick[] }) {
   }, [ticks]);
 
   return (
-    <div className="h-[32rem] w-full">
+    <div className="h-[13rem] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
+        <AreaChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="pg-fallback" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={C.blue} stopOpacity={0.45} />
+              <stop offset="100%" stopColor={C.blue} stopOpacity={0.05} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
           <XAxis
             dataKey="t_ms"
             type="number"
             domain={["dataMin", "dataMax"]}
             tickFormatter={formatClock}
-            stroke="#8b92a0"
-            fontSize={12}
+            {...axisProps}
           />
-          <YAxis
-            domain={[0, 100]}
-            stroke="#8b92a0"
-            fontSize={12}
-            label={{ value: "Yes price (cents)", angle: -90, position: "insideLeft", fill: "#8b92a0" }}
-          />
+          <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} width={32} {...axisProps} />
           <Tooltip
             labelFormatter={(v: number) => formatClock(v)}
-            contentStyle={{ background: "#14171c", border: "1px solid #22262d" }}
+            contentStyle={{
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              borderRadius: 8,
+            }}
           />
           {switchTimes.map((t) => (
             <ReferenceLine key={t} x={t} stroke="#666" strokeDasharray="4 4" strokeOpacity={0.5} />
           ))}
-          <Line
+          <Area
             type="monotone"
             dataKey="price_cents"
             name="Yes price"
-            stroke="#4a90d9"
-            dot={{ r: 2 }}
+            stroke={C.blue}
+            strokeWidth={1.5}
+            fill="url(#pg-fallback)"
+            dot={false}
+            activeDot={{ r: 4 }}
             isAnimationActive={false}
           />
-        </LineChart>
+        </AreaChart>
       </ResponsiveContainer>
     </div>
   );
@@ -274,16 +266,12 @@ export default function PriceChart({
    *  to align paced_at (local-time-as-UTC) with real-UTC price history. */
   tzOffsetMs?: number;
 }) {
-  // Show the simple fallback until price histories are available
-  if (bracketHistories.length === 0) {
-    return <FallbackChart ticks={ticks} />;
-  }
-
+  if (bracketHistories.length === 0) return <FallbackChart ticks={ticks} />;
   return <FullChart ticks={ticks} bracketHistories={bracketHistories} tzOffsetMs={tzOffsetMs} />;
 }
 
 // ---------------------------------------------------------------------------
-// Full chart — all bracket lines + snapped annotation dots
+// Full chart — one gradient area per bracket + snapped annotation dots
 // ---------------------------------------------------------------------------
 
 function FullChart({
@@ -300,22 +288,19 @@ function FullChart({
     [ticks, bracketHistories, tzOffsetMs]
   );
 
-  // Local-time clock formatter — shifts real UTC timestamps by the city's
-  // UTC offset so labels display in the city's local time (not UTC).
   const formatClockLocal = useMemo(
     () => (ms: number) => formatClock(ms, tzOffsetMs),
     [tzOffsetMs]
   );
 
-  // Unified time axis: collect every unique t_ms across all bracket histories
+  // Unified time axis: every unique t_ms across all bracket histories
   const allTms = useMemo(() => {
     const set = new Set<number>();
-    for (const b of bracketHistories)
-      for (const h of b.history) set.add(h.t * 1000);
+    for (const b of bracketHistories) for (const h of b.history) set.add(h.t * 1000);
     return [...set].sort((a, b) => a - b);
   }, [bracketHistories]);
 
-  // Fast price lookup: bracketLabel -> Map<t_ms, price_cents>
+  // bracketLabel -> Map<t_ms, price_cents>
   const priceLookup = useMemo(() => {
     const outer = new Map<string, Map<number, number>>();
     for (const b of bracketHistories) {
@@ -326,7 +311,7 @@ function FullChart({
     return outer;
   }, [bracketHistories]);
 
-  // Unified data array — one row per timestamp, one column per bracket
+  // One row per timestamp, one column per bracket
   type Row = { t_ms: number } & Record<string, number | undefined>;
   const data: Row[] = useMemo(
     () =>
@@ -341,101 +326,128 @@ function FullChart({
     [allTms, bracketHistories, priceLookup]
   );
 
-  // Pre-build snap-dot renderers (stable references per bracket+snapMap combo)
   const snapDots = useMemo(
     () =>
       Object.fromEntries(
-        bracketHistories.map((b) => [
-          b.label,
-          makeSnapDot(b.label, b.color, snapMap),
-        ])
+        bracketHistories.map((b) => [b.label, makeSnapDot(b.label, b.color, snapMap)])
       ),
     [bracketHistories, snapMap]
   );
 
-  // Last recorded price + timestamp per bracket
-  const lastPrices = useMemo(
+  return (
+    <div className="h-[13rem] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 20, right: 12, left: 0, bottom: 0 }}>
+          <defs>
+            {bracketHistories.map((b, i) => (
+              <linearGradient key={b.label} id={`pg-${i}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={b.color} stopOpacity={0.22} />
+                <stop offset="100%" stopColor={b.color} stopOpacity={0} />
+              </linearGradient>
+            ))}
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
+          <XAxis
+            dataKey="t_ms"
+            type="number"
+            domain={["dataMin", "dataMax"]}
+            tickFormatter={formatClockLocal}
+            {...axisProps}
+          />
+          <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} width={32} {...axisProps} />
+          <Tooltip content={(props) => <Top4Tooltip {...props} tzOffsetMs={tzOffsetMs} />} />
+          {bracketHistories.map((b, i) => (
+            <Area
+              key={b.label}
+              type="monotone"
+              dataKey={b.label}
+              stroke={b.color}
+              strokeWidth={1.5}
+              fill={`url(#pg-${i})`}
+              dot={snapDots[b.label]}
+              activeDot={{ r: 10 }}
+              isAnimationActive={false}
+              connectNulls
+            />
+          ))}
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// "Latest updates" card content — last price + time per bracket
+// ---------------------------------------------------------------------------
+
+export function LatestUpdates({
+  bracketHistories,
+  tzOffsetMs = 0,
+}: {
+  bracketHistories: BracketHistory[];
+  tzOffsetMs?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  const rows = useMemo(
     () =>
       bracketHistories.map((b) => {
         const last = b.history[b.history.length - 1];
         return {
           label: b.label,
           color: b.color,
-          price: last ? last.p * 100 : null,
+          price: last ? last.p : null, // 0–1
           t_ms: last ? last.t * 1000 : null,
         };
       }),
     [bracketHistories]
   );
 
+  const shown = expanded ? rows : rows.slice(0, 3);
+  const canToggle = rows.length > 3;
+
   return (
-    <div className="flex gap-4 items-start w-full">
-      <div className="h-[32rem] flex-1 min-w-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
-            <XAxis
-              dataKey="t_ms"
-              type="number"
-              domain={["dataMin", "dataMax"]}
-              tickFormatter={formatClockLocal}
-              stroke="#8b92a0"
-              fontSize={12}
-            />
-            <YAxis
-              domain={[0, 100]}
-              stroke="#8b92a0"
-              fontSize={12}
-              label={{ value: "Yes price (cents)", angle: -90, position: "insideLeft", fill: "#8b92a0" }}
-            />
-            <Tooltip
-              content={(props) => <Top4Tooltip {...props} tzOffsetMs={tzOffsetMs} />}
-            />
-            <Legend
-              wrapperStyle={{ fontSize: 10, color: "#8b92a0", paddingTop: 4 }}
-            />
-            {bracketHistories.map((b) => (
-              <Line
-                key={b.label}
-                type="monotone"
-                dataKey={b.label}
-                stroke={b.color}
-                strokeWidth={1.5}
-                dot={snapDots[b.label]}
-                activeDot={{ r: 10 }}
-                isAnimationActive={false}
-                connectNulls
-              />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
+    <div>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <ClipboardIcon width={22} height={22} className="text-[#8b92a0]" />
+          <h2 className="text-base font-semibold text-white">Latest updates</h2>
+        </div>
+        {canToggle && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Show fewer brackets" : "Show all brackets"}
+            className="text-[#8b92a0] transition-colors hover:text-white"
+          >
+            <ChevronIcon dir={expanded ? "down" : "right"} width={18} height={18} />
+          </button>
+        )}
       </div>
 
-      {/* Last-price summary table */}
-      <div className="shrink-0 pt-8 text-lg text-gray-300">
-        <table className="border-collapse">
-          <thead>
-            <tr className="text-left text-gray-500">
-              <th className="pr-6 pb-3">Bracket</th>
-              <th className="pr-6 pb-3">Price</th>
-              <th className="pb-3">Last updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lastPrices.map(({ label, color, price, t_ms }) => (
-              <tr key={label} className="border-t border-gray-800">
-                <td className="pr-6 py-1.5 font-medium" style={{ color }}>{label}</td>
-                <td className="pr-6 py-1.5 font-mono">
-                  {price !== null ? `${price.toFixed(1)}¢` : "—"}
-                </td>
-                <td className="py-1.5 text-gray-500 font-mono">
-                  {t_ms !== null ? formatClockLocal(t_ms) : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="mt-4 grid grid-cols-[1.4fr_1fr_1fr] px-1 pb-3 text-xs text-[#8b92a0]">
+        <span>Bracket</span>
+        <span>Price</span>
+        <span className="text-right">Last updated</span>
       </div>
+
+      {shown.map(({ label, color, price, t_ms }) => (
+        <div
+          key={label}
+          className="grid grid-cols-[1.4fr_1fr_1fr] items-center border-t border-[#151c2b] px-1 py-3.5 text-sm"
+        >
+          <span className="font-medium" style={{ color }}>
+            {label}
+          </span>
+          <span className="font-mono text-white">
+            {price !== null ? price.toFixed(2) : "—"}
+          </span>
+          <span className="text-right font-mono text-xs text-[#8b92a0]">
+            {t_ms !== null ? formatClock(t_ms, tzOffsetMs) : "—"}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

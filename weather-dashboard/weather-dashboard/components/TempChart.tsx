@@ -7,11 +7,12 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
 } from "recharts";
 import type { EnrichedTick } from "@/lib/weather-transform";
+import { C } from "@/lib/theme";
 
 function formatClock(ms: number) {
   return new Date(ms).toLocaleTimeString("en-US", {
@@ -29,7 +30,6 @@ export default function TempChart({
   winningLow,
   winningHigh,
   winningBracket,
-  windowStats,
 }: {
   ticks: EnrichedTick[];
   reciprocalTicks: EnrichedTick[];
@@ -37,36 +37,26 @@ export default function TempChart({
   winningLow: number | null;
   winningHigh: number | null;
   winningBracket: string | null;
-  windowStats?: {
-    label: string;
-    linearAvg: number | null;
-    linearBracket: string | null;
-    lastYesPriceLinear: number | null;
-    reciprocalAvg: number | null;
-    recBracket: string | null;
-    lastYesPriceRec: number | null;
-    tickCount: number;
-  }[];
 }) {
-  // Build linear data points keyed by paced_at
+  // Linear data points keyed by paced_at
   const linearPoints = ticks
     .filter((t) => t.paced_at !== null && t.weighted_avg !== null)
     .map((t) => ({ paced_at: t.paced_at as number, linear: t.weighted_avg as number }));
 
-  // Build a lookup for reciprocal values by paced_at so both lines share the same x-axis
+  // Reciprocal lookup so both lines share the same x-axis
   const reciprocalMap = new Map(
     reciprocalTicks
       .filter((t) => t.paced_at !== null && t.weighted_avg !== null)
       .map((t) => [t.paced_at as number, t.weighted_avg as number])
   );
 
-  // Merge: every linear point gets its matching reciprocal value (null = gap)
+  // Every linear point gets its matching reciprocal value (null = gap)
   const data = linearPoints.map((d) => ({
     ...d,
     reciprocal: reciprocalMap.get(d.paced_at) ?? null,
   }));
 
-  // If we have reciprocal-only points that don't appear in linear, append them
+  // Reciprocal-only points that don't appear in linear
   const linearSet = new Set(linearPoints.map((d) => d.paced_at));
   for (const [paced_at, val] of reciprocalMap) {
     if (!linearSet.has(paced_at)) {
@@ -75,151 +65,123 @@ export default function TempChart({
   }
   data.sort((a, b) => a.paced_at - b.paced_at);
 
-  // One X-axis tick per distinct pacing time in the merged dataset
+  // One X-axis tick per distinct pacing time
   const xTicks = [...new Set(data.map((d) => d.paced_at))].sort((a, b) => a - b);
 
-  // Count bracket hits per dataset
-  function countByBracket(ts: EnrichedTick[]) {
-    const counts = new Map<string, number>();
-    for (const t of ts) {
-      if (!t.point_bracket) continue;
-      counts.set(t.point_bracket, (counts.get(t.point_bracket) ?? 0) + 1);
-    }
-    return counts;
-  }
-
-  const linearCounts = countByBracket(ticks);
-  const reciprocalCounts = countByBracket(reciprocalTicks);
-  const allBrackets = [...new Set([...linearCounts.keys(), ...reciprocalCounts.keys()])]
-    .sort((a, b) => parseInt(a) - parseInt(b));
+  const hasBand = winningLow !== null && winningHigh !== null;
+  const bracketText = winningBracket
+    ? /^\d+-\d+$/.test(winningBracket)
+      ? `${winningBracket}°${unit}`
+      : winningBracket
+    : "";
 
   return (
-    <div className="flex gap-4 w-full">
-      <div className="h-[32rem] flex-1 min-w-0">
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#22262d" />
-          <XAxis
-            dataKey="paced_at"
-            type="number"
-            domain={["dataMin", "dataMax"]}
-            ticks={xTicks}
-            interval={0}
-            tickFormatter={formatClock}
-            stroke="#8b92a0"
-            fontSize={11}
-            angle={-40}
-            textAnchor="end"
-            height={55}
-          />
-          <YAxis
-            stroke="#8b92a0"
-            fontSize={12}
-            domain={([dataMin, dataMax]: [number, number]) => [
-              Math.floor(dataMin - 1),
-              Math.ceil(dataMax + 1),
-            ]}
-            label={{ value: `Weighted avg temp (${unit})`, angle: -90, position: "insideLeft", fill: "#8b92a0" }}
-          />
-          <Tooltip
-            labelFormatter={(v) => formatClock(v as number)}
-            contentStyle={{ background: "#14171c", border: "1px solid #22262d" }}
-          />
-          {winningLow !== null && winningHigh !== null && (
-            <ReferenceArea
-              y1={winningLow}
-              y2={winningHigh}
-              fill="#5cb85c"
-              fillOpacity={0.2}
-              label={{ value: `Winning bracket: ${winningBracket}`, fill: "#5cb85c", fontSize: 11 }}
+    <div>
+      <div className="h-[19rem] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
+            <XAxis
+              dataKey="paced_at"
+              type="number"
+              domain={["dataMin", "dataMax"]}
+              ticks={xTicks}
+              interval={0}
+              tickFormatter={formatClock}
+              stroke={C.sub}
+              fontSize={10}
+              tickLine={false}
+              axisLine={{ stroke: C.axis }}
+              angle={-40}
+              textAnchor="end"
+              height={55}
             />
-          )}
-          <Legend />
-          <Line
-            type="monotone"
-            dataKey="linear"
-            name="Linear (weighted avg)"
-            stroke="#d9534f"
-            dot={{ r: 2 }}
-            isAnimationActive={false}
-            connectNulls={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="reciprocal"
-            name="Reciprocal (weighted avg)"
-            stroke="#5bc0de"
-            dot={{ r: 2 }}
-            isAnimationActive={false}
-            connectNulls={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+            <YAxis
+              stroke={C.sub}
+              fontSize={11}
+              width={32}
+              tickLine={false}
+              axisLine={{ stroke: C.axis }}
+              domain={([dataMin, dataMax]: [number, number]) => [
+                Math.floor(dataMin - 1),
+                Math.ceil(dataMax + 1),
+              ]}
+            />
+            <Tooltip
+              labelFormatter={(v) => formatClock(v as number)}
+              contentStyle={{
+                background: C.panel,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+              }}
+            />
+            {hasBand && (
+              <ReferenceArea
+                y1={winningLow as number}
+                y2={winningHigh as number}
+                fill={C.green}
+                fillOpacity={0.16}
+                stroke="none"
+                label={{
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  content: (p: any) => (
+                    <text
+                      x={p.viewBox.x + p.viewBox.width * 0.32}
+                      y={p.viewBox.y + 16}
+                      fill={C.green}
+                      fontSize={11}
+                    >
+                      Winning bucket {bracketText}
+                    </text>
+                  ),
+                }}
+              />
+            )}
+            {hasBand && (
+              <ReferenceLine
+                y={((winningLow as number) + (winningHigh as number)) / 2}
+                stroke={C.green}
+                strokeOpacity={0.6}
+                strokeDasharray="4 4"
+              />
+            )}
+            <Line
+              type="monotone"
+              dataKey="linear"
+              name="Linear (weighted avg)"
+              stroke={C.red}
+              strokeWidth={1.5}
+              dot={{ r: 2.5, fill: C.red, strokeWidth: 0 }}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="reciprocal"
+              name="Reciprocal (weighted avg)"
+              stroke={C.cyan}
+              strokeWidth={1.5}
+              dot={{ r: 2.5, fill: C.cyan, strokeWidth: 0 }}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+              connectNulls={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
 
-      {/* Bracket hit tracker */}
-      <div className="shrink-0 self-start pt-9">
-        <table className="text-lg border-collapse">
-          <thead>
-            <tr>
-              <th className="px-3 py-1.5 text-right text-[#8b92a0]">bracket</th>
-              <th className="px-3 py-1.5 text-[#5bc0de]">rec</th>
-              <th className="px-3 py-1.5 text-[#d9534f]">linear</th>
-            </tr>
-          </thead>
-          <tbody>
-            {allBrackets.map((b) => (
-              <tr key={b} className="border-t border-[#22262d]">
-                <td className="px-3 py-1.5 text-right text-[#8b92a0]">{b}</td>
-                <td className="px-3 py-1.5 text-center text-[#5bc0de]">
-                  {reciprocalCounts.get(b) ?? 0}
-                </td>
-                <td className="px-3 py-1.5 text-center text-[#d9534f]">
-                  {linearCounts.get(b) ?? 0}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Left-aligned legend under the chart */}
+      <div className="mt-3 flex items-center gap-6 pl-2 text-xs">
+        <span className="flex items-center gap-2" style={{ color: C.red }}>
+          <span className="h-2 w-2 rounded-full" style={{ background: C.red }} />
+          Linear (weighted avg)
+        </span>
+        <span className="flex items-center gap-2" style={{ color: C.cyan }}>
+          <span className="h-2 w-2 rounded-full" style={{ background: C.cyan }} />
+          Reciprocal (weighted avg)
+        </span>
       </div>
-
-      {/* Rolling window averages */}
-      {windowStats && (
-        <div className="shrink-0 self-start pt-9">
-          <table className="text-lg border-collapse">
-            <thead>
-              <tr className="text-[#8b92a0]">
-                <th className="px-3 py-1.5 text-left">window</th>
-                <th className="px-3 py-1.5 text-right text-[#d9534f]">linear avg</th>
-                <th className="px-3 py-1.5 text-right text-[#d9534f]">bracket price L</th>
-                <th className="px-3 py-1.5 text-right text-[#5bc0de]">rec avg</th>
-                <th className="px-3 py-1.5 text-right text-[#5bc0de]">bracket price R</th>
-                <th className="px-3 py-1.5 text-right">ticks</th>
-              </tr>
-            </thead>
-            <tbody>
-              {windowStats.map((row) => (
-                <tr key={row.label} className="border-t border-[#22262d]">
-                  <td className="px-3 py-1.5 font-mono text-[#8b92a0]">{row.label}</td>
-                  <td className="px-3 py-1.5 text-right text-[#d9534f]">
-                    {row.linearAvg != null ? row.linearAvg.toFixed(3) : "—"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-[#d9534f]" title={row.linearBracket ?? undefined}>
-                    {row.lastYesPriceLinear != null ? row.lastYesPriceLinear.toFixed(3) : "—"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-[#5bc0de]">
-                    {row.reciprocalAvg != null ? row.reciprocalAvg.toFixed(3) : "—"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right text-[#5bc0de]" title={row.recBracket ?? undefined}>
-                    {row.lastYesPriceRec != null ? row.lastYesPriceRec.toFixed(3) : "—"}
-                  </td>
-                  <td className="px-3 py-1.5 text-right">{row.tickCount}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }
