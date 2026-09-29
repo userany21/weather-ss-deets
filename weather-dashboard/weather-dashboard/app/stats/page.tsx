@@ -14,6 +14,7 @@ import {
   ReferenceLine,
 } from "recharts";
 import { CITIES } from "@/lib/cities-config";
+import LocalTimesPanel from "@/components/LocalTimesPanel";
 
 // ---------------------------------------------------------------------------
 // API response types (mirrors what /api/stats returns)
@@ -580,7 +581,8 @@ export default function StatsExplorerPage() {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="max-w-[1400px]">
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_13rem]">
+    <div className="min-w-0 max-w-[1400px]">
       {/* Breadcrumb + title */}
       <div className="mb-2 text-[13px] text-[#8a97b1]">
         <Link href="/" className="hover:text-white">
@@ -1282,6 +1284,8 @@ export default function StatsExplorerPage() {
           )}
         </div>
       )}
+    </div>
+    <LocalTimesPanel />
     </div>
   );
 }
