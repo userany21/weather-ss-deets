@@ -99,25 +99,6 @@ interface ScanResponse {
 }
 
 // ---------------------------------------------------------------------------
-// "Latest updates" card types
-// ---------------------------------------------------------------------------
-
-interface LatestUpdate {
-  bracket: string;
-  price: number;
-  updated: string;
-  tone: "blue" | "red" | "green";
-}
-
-// TODO: placeholder rows. Swap for a real feed (SWR fetch) once there's an
-// endpoint for it, then pass it to <LatestUpdatesCard />.
-const LATEST_UPDATES: LatestUpdate[] = [
-  { bracket: "71 or below", price: 0.14, updated: "1:51 PM", tone: "blue" },
-  { bracket: "72-73",        price: 0.14, updated: "1:52 PM", tone: "red"  },
-  { bracket: "74-75",        price: 0.14, updated: "1:52 PM", tone: "green" },
-];
-
-// ---------------------------------------------------------------------------
 // Constants / statics
 // ---------------------------------------------------------------------------
 
@@ -314,12 +295,6 @@ const ChartBoxIcon = ({ className = "h-5 w-5" }: IconProps) => (
     <path d="m7 15 3-3 3 2 4-5" />
   </Svg>
 );
-const BoltIcon     = ({ className = "h-5 w-5" }: IconProps) => (
-  <Svg className={className} fill="currentColor">
-    <path d="M13 3 5 14h6l-1 7 8-11h-6l1-7Z" />
-  </Svg>
-);
-
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
@@ -390,47 +365,6 @@ function DateField({
         onChange={(e) => onChange(e.target.value)}
         className={`${FIELD} pl-8 pr-1 text-xs [color-scheme:dark] [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-0`}
       />
-    </div>
-  );
-}
-
-function LatestUpdatesCard({ updates }: { updates: LatestUpdate[] }) {
-  const tone: Record<LatestUpdate["tone"], string> = {
-    blue:  "text-[#38a3f5]",
-    red:   "text-[#ff5566]",
-    green: "text-[#2ee08a]",
-  };
-  return (
-    <div className={CARD}>
-      <div className="mb-3 flex items-center gap-2.5">
-        <BoltIcon className="h-5 w-5 text-[#38a3f5]" />
-        <h2 className="text-[15px] font-semibold text-white">Latest updates</h2>
-        {/* TODO: point at the real "all updates" route */}
-        <Link
-          href="#"
-          className="ml-auto inline-flex items-center gap-1 text-xs text-[#38a3f5] hover:underline"
-        >
-          View all <ArrowRight />
-        </Link>
-      </div>
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr className="text-xs text-[#8a97b1]">
-            <th className="px-3 py-2 text-left font-normal">Bracket</th>
-            <th className="px-3 py-2 text-left font-normal">Price</th>
-            <th className="px-3 py-2 text-left font-normal">Last updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {updates.map((u) => (
-            <tr key={u.bracket} className="border-t border-[#121d31]">
-              <td className={`px-3 py-2.5 font-medium ${tone[u.tone]}`}>{u.bracket}</td>
-              <td className="px-3 py-2.5 tabular-nums text-white">{u.price.toFixed(2)}</td>
-              <td className="px-3 py-2.5 text-xs text-[#8a97b1]">{u.updated}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -1084,8 +1018,8 @@ export default function StatsExplorerPage() {
             </div>
           </div>
 
-          {/* ---- Results table + latest updates side-by-side ---- */}
-          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_23.5rem]">
+          {/* ---- Results table ---- */}
+          <div>
             <div className={`${CARD} overflow-x-auto px-5`}>
               <div className="mb-2 flex items-center gap-3">
                 <ChartBoxIcon className="h-5 w-5 shrink-0 text-[#38a3f5]" />
@@ -1208,8 +1142,6 @@ export default function StatsExplorerPage() {
                 </tbody>
               </table>
             </div>
-
-            <LatestUpdatesCard updates={LATEST_UPDATES} />
           </div>
 
           {/* ---- Live Opportunity Scanner panel ---- */}
