@@ -629,6 +629,16 @@ export default function StatsExplorerPage() {
     });
   }, []);
 
+  const toggleAllCitiesInRegion = useCallback((cities: { city: string }[]) => {
+    const names = cities.map((c) => c.city);
+    const allSelected = names.every((c) => selectedCities.includes(c));
+    if (allSelected) {
+      setSelectedCities((prev) => prev.filter((c) => !names.includes(c)));
+    } else {
+      setSelectedCities((prev) => [...prev, ...names.filter((c) => !prev.includes(c))]);
+    }
+  }, [selectedCities]);
+
   const cityQuery  = citySearch.trim().toLowerCase();
   const regionGroups = useMemo(
     () =>
@@ -679,6 +689,11 @@ export default function StatsExplorerPage() {
       delete next[key];
       return next;
     });
+  }, []);
+
+  const clearAllPinned = useCallback(() => {
+    setPinnedCriteria([]);
+    setScanResults({});
   }, []);
 
   const runScan = useCallback(async () => {
@@ -1005,18 +1020,39 @@ export default function StatsExplorerPage() {
             {regionGroups.map(({ region, cities }) => {
               // Searching always expands so matches are visible
               const open = cityQuery !== "" || !collapsedRegions.has(region);
+              const regionCityNames = cities.map((c) => c.city);
+              const allRegionSelected = regionCityNames.every((c) => selectedCities.includes(c));
+              const someRegionSelected = !allRegionSelected && regionCityNames.some((c) => selectedCities.includes(c));
               return (
                 <div key={region} className="mb-1">
-                  <button
-                    onClick={() => toggleRegion(region)}
-                    aria-expanded={open}
-                    className="flex w-full items-center justify-between py-1 text-xs capitalize text-[#8a97b1] hover:text-white"
-                  >
-                    {region}
-                    <ChevronDown
-                      className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`}
-                    />
-                  </button>
+                  <div className="flex w-full items-center gap-1.5 py-1">
+                    {/* Region-wide select/deselect */}
+                    <button
+                      onClick={() => toggleAllCitiesInRegion(cities)}
+                      aria-label={allRegionSelected ? `Deselect all ${region} cities` : `Select all ${region} cities`}
+                      title={allRegionSelected ? `Deselect all ${region}` : `Select all ${region}`}
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold transition-colors ${
+                        allRegionSelected
+                          ? "border-[#22c98a] bg-[#22c98a]/20 text-[#22d38a]"
+                          : someRegionSelected
+                          ? "border-[#22c98a]/50 bg-[#22c98a]/10 text-[#22d38a]"
+                          : "border-[#1c2b45] bg-[#0b1626] text-[#5f6c86] hover:border-[#22c98a]/50 hover:text-[#22d38a]"
+                      }`}
+                    >
+                      {allRegionSelected ? "✓" : someRegionSelected ? "–" : ""}
+                    </button>
+                    {/* Expand/collapse toggle */}
+                    <button
+                      onClick={() => toggleRegion(region)}
+                      aria-expanded={open}
+                      className="flex flex-1 items-center justify-between text-xs capitalize text-[#8a97b1] hover:text-white"
+                    >
+                      {region}
+                      <ChevronDown
+                        className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`}
+                      />
+                    </button>
+                  </div>
                   {open &&
                     cities.map((c) => (
                       <label
@@ -1353,6 +1389,12 @@ export default function StatsExplorerPage() {
                   {lastScanTime && (
                     <span className="text-xs text-[#8a97b1]">Last scan: {lastScanTime}</span>
                   )}
+                  <button
+                    onClick={clearAllPinned}
+                    className="text-xs text-[#8a97b1] hover:text-white hover:underline"
+                  >
+                    clear all
+                  </button>
                   <button
                     onClick={runScan}
                     disabled={isScanning}
