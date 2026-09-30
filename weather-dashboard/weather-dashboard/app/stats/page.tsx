@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, type ReactNode } from "react";
+import { useState, useMemo, useCallback, Fragment, type ReactNode } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import {
@@ -46,6 +46,29 @@ interface StatsResponse {
   total_rows: number;
   dimension_registry: DimMeta[];
   computed_at: string | null;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Drill-down types (mirrors what /api/stats/rows returns)
+// ---------------------------------------------------------------------------
+
+interface DrillRow {
+  local_date: string;
+  bracket: string;
+  method: string;
+  first_tick_price_cents: number | null;
+  won: boolean | null;
+  edge_cents: number | null;
+  final_rank: number | null;
+  resolved: boolean;
+  winning_bracket: string | null;
+}
+
+interface DrillResponse {
+  rows: DrillRow[];
+  bucket_label: string;
+  bucket_key: string;
   error?: string;
 }
 
@@ -176,6 +199,28 @@ function buildApiUrl(
   return `/api/stats?${params.toString()}`;
 }
 
+/** Builds the /api/stats/rows URL for a single bucket's drill-down —
+ * mirrors buildApiUrl's filters (minus minCount, which doesn't apply here). */
+function buildDrillUrl(
+  bucketKey: string,
+  dims: ActiveDim[],
+  cities: string[],
+  dateFrom: string,
+  dateTo: string,
+  method: string,
+  resolvedOnly: boolean
+): string {
+  const params = new URLSearchParams();
+  params.set("by", dimsToByParam(dims));
+  params.set("bucketKey", bucketKey);
+  if (cities.length > 0) params.set("city", cities.join(","));
+  if (dateFrom) params.set("dateFrom", dateFrom);
+  if (dateTo)   params.set("dateTo",   dateTo);
+  if (method && method !== "all") params.set("method", method);
+  if (resolvedOnly) params.set("resolvedOnly", "1");
+  return `/api/stats/rows?${params.toString()}`;
+}
+
 function fmtEdge(n: number | null): string {
   if (n == null) return "—";
   return `${n > 0 ? "+" : ""}${n.toFixed(1)}¢`;
@@ -259,9 +304,6 @@ function Svg({
 
 const ChevronDown  = ({ className = "h-3.5 w-3.5" }: IconProps) => (
   <Svg className={className}><path d="m6 9 6 6 6-6" /></Svg>
-);
-const ChevronRight = ({ className = "h-3.5 w-3.5" }: IconProps) => (
-  <Svg className={className}><path d="m9 6 6 6-6 6" /></Svg>
 );
 const PlusIcon     = ({ className = "h-4 w-4" }: IconProps) => (
   <Svg className={className}><path d="M12 5v14M5 12h14" /></Svg>
@@ -347,6 +389,94 @@ function SortArrow({
   );
 }
 
+/** Formats first_tick_price_cents for the drill sub-table (cents, no sign). */
+function fmtPrice(n: number | null): string {
+  if (n == null) return "—";
+  return `${n.toFixed(0)}¢`;
+}
+
+/**
+ * Inline sub-table shown when a Market price details row is expanded.
+ * Renders every raw stats_features doc that was averaged into that bucket.
+ */
+function DrillSubTable({
+  rows,
+  bucketLabel,
+}: {
+  rows: DrillRow[];
+  bucketLabel?: string;
+}) {
+  if (rows.length === 0) {
+    return (
+      <div className="py-3 text-xs text-[#8a97b1]">
+        No underlying rows found for this bucket.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-[#16233a] bg-[#070f1c] px-3 py-3">
+      {bucketLabel && (
+        <div className="mb-2 text-[11px] text-[#5f6c86]">
+          {rows.length.toLocaleString()} row{rows.length !== 1 ? "s" : ""} · {bucketLabel}
+        </div>
+      )}
+      <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="text-[#5f6c86]">
+            <th className="px-2 py-1.5 text-left font-normal">Date</th>
+            <th className="px-2 py-1.5 text-left font-normal">Bracket</th>
+            <th className="px-2 py-1.5 text-left font-normal">Method</th>
+            <th className="px-2 py-1.5 text-right font-normal">Price</th>
+            <th className="px-2 py-1.5 text-center font-normal">W/L</th>
+            <th className="px-2 py-1.5 text-right font-normal">Edge</th>
+            <th className="px-2 py-1.5 text-left font-normal">Winning Bracket</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => {
+            const edgePositive = r.edge_cents != null && r.edge_cents > 0;
+            const edgeNegative = r.edge_cents != null && r.edge_cents < 0;
+            return (
+              <tr
+                key={`${r.local_date}-${r.bracket}-${r.method}-${i}`}
+                className="border-t border-[#121d31]"
+              >
+                <td className="px-2 py-1.5 tabular-nums text-[#c5d0e6]">{r.local_date}</td>
+                <td className="px-2 py-1.5 font-mono text-[#c5d0e6]">{r.bracket}</td>
+                <td className="px-2 py-1.5 capitalize text-[#8a97b1]">{r.method}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums text-[#c5d0e6]">
+                  {fmtPrice(r.first_tick_price_cents)}
+                </td>
+                <td className="px-2 py-1.5 text-center font-semibold">
+                  {!r.resolved || r.won == null ? (
+                    <span className="text-[#5f6c86]">—</span>
+                  ) : r.won ? (
+                    <span style={{ color: C.good }}>W</span>
+                  ) : (
+                    <span style={{ color: C.bad }}>L</span>
+                  )}
+                </td>
+                <td
+                  className="px-2 py-1.5 text-right font-medium tabular-nums"
+                  style={{
+                    color: edgePositive ? C.good : edgeNegative ? C.bad : C.axis,
+                  }}
+                >
+                  {fmtEdge(r.edge_cents)}
+                </td>
+                <td className="px-2 py-1.5 text-[#8a97b1]">
+                  {r.winning_bracket ?? "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function DateField({
   value,
   onChange,
@@ -401,6 +531,9 @@ export default function StatsExplorerPage() {
   const [isScanning, setIsScanning]         = useState(false);
   const [lastScanTime, setLastScanTime]     = useState<string | null>(null);
 
+  // ---- Row drill-down state — one bucket expanded at a time ----
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
   // ---- SWR data fetch ----
   const apiUrl = useMemo(
     () =>
@@ -419,6 +552,29 @@ export default function StatsExplorerPage() {
   const { data, isLoading } = useSWR<StatsResponse>(apiUrl, fetcher, {
     revalidateOnFocus: false,
   });
+
+  // ---- Drill-down data fetch — only runs when a bucket row is expanded ----
+  const drillUrl = useMemo(
+    () =>
+      expandedKey
+        ? buildDrillUrl(
+            expandedKey,
+            activeDims,
+            selectedCities,
+            dateFrom,
+            dateTo,
+            method,
+            resolvedOnly
+          )
+        : null,
+    [expandedKey, activeDims, selectedCities, dateFrom, dateTo, method, resolvedOnly]
+  );
+
+  const { data: drillData, isLoading: drillLoading } = useSWR<DrillResponse>(
+    drillUrl,
+    fetcher,
+    { revalidateOnFocus: false }
+  );
 
   const registry: DimMeta[]    = data?.dimension_registry ?? [];
   const activeDimIds            = useMemo(() => new Set(activeDims.map((d) => d.id)), [activeDims]);
@@ -486,6 +642,11 @@ export default function StatsExplorerPage() {
       })).filter((g) => g.cities.length > 0),
     [cityQuery]
   );
+
+  // ---- Row drill-down ----
+  const toggleExpanded = useCallback((key: string) => {
+    setExpandedKey((prev) => (prev === key ? null : key));
+  }, []);
 
   // ---- Table sort ----
   function handleSort(col: SortCol) {
@@ -1069,76 +1230,112 @@ export default function StatsExplorerPage() {
                     const edgePositive = b.avg_edge_cents != null && b.avg_edge_cents > 0;
                     const edgeNegative = b.avg_edge_cents != null && b.avg_edge_cents < 0;
                     const isPinned     = pinnedCriteria.some((p) => p.key === b.key);
+                    const isExpanded   = expandedKey === b.key;
                     const { city, rest } = splitBucketLabel(b.label);
                     const dot          = city
                       ? cityColor(city)
                       : DOT_COLORS[idx % DOT_COLORS.length];
                     return (
-                      // Clicking a row pins/unpins it for the live scanner
-                      <tr
-                        key={b.key}
-                        onClick={() => (isPinned ? unpinRow(b.key) : pinRow(b))}
-                        title={isPinned ? "Remove from scanner" : "Pin for live scan"}
-                        className="cursor-pointer border-t border-[#121d31] transition-colors hover:bg-white/[0.03]"
-                      >
-                        <td className="px-3 py-2.5">
-                          <div className="flex items-center gap-3">
-                            <span
-                              className={`h-3 w-3 shrink-0 rounded-full ${
-                                isPinned
-                                  ? "ring-2 ring-white/80 ring-offset-2 ring-offset-[#0a1322]"
-                                  : ""
-                              }`}
-                              style={{ background: dot }}
-                            />
-                            {city ? (
-                              <>
-                                <span
-                                  className="text-sm font-medium capitalize"
-                                  style={{ color: dot }}
-                                >
-                                  {city}
-                                </span>
-                                <span className="text-[#5f6c86]">→</span>
-                                <span className="text-xs text-[#8a97b1]">{rest}</span>
-                              </>
-                            ) : (
-                              <span className="text-xs text-[#c5d0e6]">{b.label}</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-white">
-                          {b.count.toLocaleString()}
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-[#c5d0e6]">
-                          {b.resolved.toLocaleString()}
-                        </td>
-                        <td
-                          className="px-3 py-2.5 text-right font-medium tabular-nums"
-                          style={{
-                            color: edgePositive ? C.good : edgeNegative ? C.bad : C.axis,
-                          }}
+                      <Fragment key={b.key}>
+                        {/* Clicking a row pins/unpins it for the live scanner */}
+                        <tr
+                          onClick={() => (isPinned ? unpinRow(b.key) : pinRow(b))}
+                          title={isPinned ? "Remove from scanner" : "Pin for live scan"}
+                          className="cursor-pointer border-t border-[#121d31] transition-colors hover:bg-white/[0.03]"
                         >
-                          {fmtEdge(b.avg_edge_cents)}
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-[#38b6ff]">
-                          {fmtPct(b.win_rate)}
-                        </td>
-                        <td className="px-2 py-2.5 text-right">
-                          <button
-                            type="button"
-                            aria-pressed={isPinned}
-                            aria-label={isPinned ? "Remove from scanner" : "Pin for live scan"}
-                            className="inline-flex align-middle"
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-3">
+                              <span
+                                className={`h-3 w-3 shrink-0 rounded-full ${
+                                  isPinned
+                                    ? "ring-2 ring-white/80 ring-offset-2 ring-offset-[#0a1322]"
+                                    : ""
+                                }`}
+                                style={{ background: dot }}
+                              />
+                              {city ? (
+                                <>
+                                  <span
+                                    className="text-sm font-medium capitalize"
+                                    style={{ color: dot }}
+                                  >
+                                    {city}
+                                  </span>
+                                  <span className="text-[#5f6c86]">→</span>
+                                  <span className="text-xs text-[#8a97b1]">{rest}</span>
+                                </>
+                              ) : (
+                                <span className="text-xs text-[#c5d0e6]">{b.label}</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-white">
+                            {b.count.toLocaleString()}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-[#c5d0e6]">
+                            {b.resolved.toLocaleString()}
+                          </td>
+                          <td
+                            className="px-3 py-2.5 text-right font-medium tabular-nums"
+                            style={{
+                              color: edgePositive ? C.good : edgeNegative ? C.bad : C.axis,
+                            }}
                           >
+                            {fmtEdge(b.avg_edge_cents)}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums text-[#38b6ff]">
+                            {fmtPct(b.win_rate)}
+                          </td>
+                          <td className="px-2 py-2.5 text-right">
                             {isPinned ? (
-                              <span className="text-[#22d38a]">◉</span>
+                              <span
+                                aria-pressed={isPinned}
+                                aria-label="Remove from scanner"
+                                className="inline-flex align-middle text-[#22d38a]"
+                              >
+                                ◉
+                              </span>
                             ) : (
-                              <ChevronRight className="h-3.5 w-3.5 text-[#5f6c86]" />
+                              <button
+                                type="button"
+                                aria-expanded={isExpanded}
+                                aria-label={isExpanded ? "Collapse rows" : "Expand rows"}
+                                title={isExpanded ? "Collapse rows" : "Show underlying rows"}
+                                onClick={(e) => {
+                                  // Stop this from also toggling the row's pin state
+                                  e.stopPropagation();
+                                  toggleExpanded(b.key);
+                                }}
+                                className="inline-flex align-middle"
+                              >
+                                <ChevronDown
+                                  className={`h-3.5 w-3.5 text-[#5f6c86] transition-transform ${
+                                    isExpanded ? "" : "-rotate-90"
+                                  }`}
+                                />
+                              </button>
                             )}
-                          </button>
-                        </td>
-                      </tr>
+                          </td>
+                        </tr>
+
+                        {/* Drill-down sub-table — the raw rows behind this bucket */}
+                        {isExpanded && (
+                          <tr key={`${b.key}-drill`} className="border-t border-[#121d31]">
+                            <td colSpan={6} className="px-3 pb-4 pt-1">
+                              {drillLoading ? (
+                                <div className="py-3 text-xs text-[#8a97b1]">Loading rows…</div>
+                              ) : drillData?.error ? (
+                                <div className="py-3 text-xs text-[#ff5566]">{drillData.error}</div>
+                              ) : (
+                                <DrillSubTable
+                                  rows={drillData?.rows ?? []}
+                                  bucketLabel={drillData?.bucket_label}
+                                />
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>

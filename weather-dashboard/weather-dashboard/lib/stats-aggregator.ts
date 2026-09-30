@@ -84,6 +84,19 @@ export interface BucketResult {
   avg_edge_cents: number | null;
 }
 
+/** One raw `stats_features` doc, flattened for the drill-down sub-table. */
+export interface DrillRow {
+  local_date: string;
+  bracket: string;
+  method: string;
+  first_tick_price_cents: number | null;
+  won: boolean | null;
+  edge_cents: number | null;
+  final_rank: number | null;
+  resolved: boolean;
+  winning_bracket: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -424,18 +437,9 @@ export function serializeRegistry() {
 // Aggregator
 // ---------------------------------------------------------------------------
 
-export async function aggregate(
-  filters: StatsFilters,
-  dimensions: DimensionSpec[]
-): Promise<{
-  buckets: BucketResult[];
-  totalRows: number;
-  computedAt: Date | null;
-}> {
-  const db = await getDb();
-  const col = db.collection<FeatureRow>("stats_features");
-
-  // Build Mongo match from filters
+/** Builds the shared Mongo match object from StatsFilters — used by both
+ * `aggregate()` and `getRowsForBucket()` so the two can never drift apart. */
+function buildMongoMatch(filters: StatsFilters): Record<string, unknown> {
   const match: Record<string, unknown> = {};
 
   if (filters.cities?.length) {
@@ -461,6 +465,22 @@ export async function aggregate(
   if (filters.resolvedOnly) {
     match.resolved = true;
   }
+
+  return match;
+}
+
+export async function aggregate(
+  filters: StatsFilters,
+  dimensions: DimensionSpec[]
+): Promise<{
+  buckets: BucketResult[];
+  totalRows: number;
+  computedAt: Date | null;
+}> {
+  const db = await getDb();
+  const col = db.collection<FeatureRow>("stats_features");
+
+  const match = buildMongoMatch(filters);
 
   const rows = (await col.find(match).toArray()) as unknown as FeatureRow[];
   const totalRows = rows.length;
@@ -551,4 +571,122 @@ export async function aggregate(
   });
 
   return { buckets, totalRows, computedAt };
+}
+
+// ---------------------------------------------------------------------------
+// Drill-down — raw rows behind a single bucket
+// ---------------------------------------------------------------------------
+
+/**
+ * Given the same filters + dimensions used to build a bucket, plus that
+ * bucket's composite `key` (pipe-separated, one part per dimension, in the
+ * same order as `dimensions`), returns every raw `stats_features` doc that
+ * was folded into it. Runs each candidate row through the exact same
+ * `bucket()` functions the aggregator used, so the drill-down can never
+ * drift from what the table counted.
+ */
+export async function getRowsForBucket(
+  filters: StatsFilters,
+  dimensions: DimensionSpec[],
+  bucketKey: string
+): Promise<{ rows: DrillRow[]; bucketLabel: string }> {
+  if (dimensions.length === 0) {
+    throw new Error("No dimensions specified");
+  }
+
+  const targetParts = bucketKey.split("|");
+  if (targetParts.length !== dimensions.length) {
+    throw new Error(
+      `bucketKey has ${targetParts.length} part(s) but ${dimensions.length} dimension(s) specified`
+    );
+  }
+
+  const db = await getDb();
+  const col = db.collection<FeatureRow>("stats_features");
+
+  const match = buildMongoMatch(filters);
+  const rows = (await col.find(match).toArray()) as unknown as FeatureRow[];
+
+  // Resolve all dimension defs up front
+  const dimDefs = dimensions.map((spec) => {
+    const def = DIMENSION_REGISTRY_MAP.get(spec.id);
+    if (!def) throw new Error(`Unknown dimension: "${spec.id}"`);
+    return { def, config: spec.config };
+  });
+
+  // Keep only rows whose composite bucket key matches the target exactly
+  const matched: FeatureRow[] = [];
+  for (const row of rows) {
+    let isMatch = true;
+    for (let i = 0; i < dimDefs.length; i++) {
+      const part = dimDefs[i].def.bucket(row, dimDefs[i].config);
+      if (part !== targetParts[i]) {
+        isMatch = false;
+        break;
+      }
+    }
+    if (isMatch) matched.push(row);
+  }
+
+  // Resolve winning_bracket per (city, local_date, method) with a single
+  // secondary query rather than one lookup per row.
+  const cities = new Set<string>();
+  const dates = new Set<string>();
+  const methods = new Set<FeatureRow["method"]>();
+  for (const row of matched) {
+    cities.add(row.city);
+    dates.add(row.local_date);
+    methods.add(row.method);
+  }
+
+  const winnerMap = new Map<string, string>();
+  if (matched.length > 0) {
+    const winnerDocs = (await col
+      .find(
+        {
+          city: { $in: [...cities] },
+          local_date: { $in: [...dates] },
+          method: { $in: [...methods] },
+          won: true,
+        },
+        {
+          projection: { city: 1, local_date: 1, method: 1, bracket: 1 },
+        }
+      )
+      .toArray()) as unknown as Pick<
+      FeatureRow,
+      "city" | "local_date" | "method" | "bracket"
+    >[];
+
+    for (const doc of winnerDocs) {
+      winnerMap.set(`${doc.city}|${doc.local_date}|${doc.method}`, doc.bracket);
+    }
+  }
+
+  const drillRows: DrillRow[] = matched.map((row) => ({
+    local_date: row.local_date,
+    bracket: row.bracket,
+    method: row.method,
+    first_tick_price_cents: row.first_tick_price_cents,
+    won: row.won,
+    edge_cents: row.edge_cents,
+    final_rank: row.final_rank,
+    resolved: row.resolved,
+    winning_bracket:
+      winnerMap.get(`${row.city}|${row.local_date}|${row.method}`) ?? null,
+  }));
+
+  // Most recent first
+  drillRows.sort((a, b) => {
+    if (a.local_date !== b.local_date) {
+      return a.local_date < b.local_date ? 1 : -1;
+    }
+    return a.bracket.localeCompare(b.bracket);
+  });
+
+  const bucketLabel = dimDefs
+    .map((d, i) => d.def.bucketLabel(targetParts[i], d.config))
+    .join(" × ");
+
+  return { rows: drillRows, bucketLabel };
 }
