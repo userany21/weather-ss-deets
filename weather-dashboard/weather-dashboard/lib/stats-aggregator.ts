@@ -434,6 +434,222 @@ export function serializeRegistry() {
 }
 
 // ---------------------------------------------------------------------------
+// First-prediction filter
+// ---------------------------------------------------------------------------
+//
+// `stats_features` holds one doc per (city, local_date, bracket, method), and each
+// doc's first_tick_price_cents is that BRACKET's own first tick. When the model
+// changes its mind during the day, the new bracket gets its own "first tick" and
+// shows up as a second row for the same city-day.
+//
+// The intended grain is ONE row per (city, local_date, method): the bracket from the
+// city's FIRST prediction of the day. We enforce that here on read, straight from the
+// raw tick collections, so no stats_features data has to change.
+//
+//   - "First" = earliest parsed pacing_time of the city-day (tie → earlier captured_at).
+//   - It must land inside the city's first-tick window below. If it doesn't (e.g. the
+//     8:30 AM tick was missed and the earliest is 9:00 AM) the city-day is dropped.
+//   - combined only counts when the linear (high-temp) and reciprocal first predictions
+//     are valid AND land on the same bracket.
+//   - The stored bracket is trusted as-is (n8n already rounds weighted_avg).
+//
+// Applied ONLY when a first-tick dimension is selected (First-Tick Price / First-Tick
+// Hour), since those are the dimensions whose meaning depends on "the first prediction".
+// Every other dimension (Rank at Hour-N, Leader, etc.) still sees every bracket row,
+// exactly as before.
+// Flip FIRST_PREDICTION_ONLY to false to turn the filter off entirely.
+const FIRST_PREDICTION_ONLY = true;
+const FIRST_TICK_DIMENSION_IDS = new Set(["price", "first_tick_hour"]);
+
+const hm = (h: number, m: number): number => h * 60 + m;
+
+/**
+ * Per-city window [start, end] (minutes since local midnight) in which the day's
+ * first prediction must land. Keys are normalised city names (lowercase, letters
+ * only), so "hong kong", "hong-kong" and "Hong_Kong" all resolve to "hongkong".
+ */
+const FIRST_TICK_WINDOWS: Record<string, [number, number]> = {
+  // Asia
+  tokyo: [hm(8, 30), hm(8, 30)],
+  shenzhen: [hm(9, 0), hm(9, 0)],
+  seoul: [hm(8, 30), hm(8, 30)],
+  beijing: [hm(8, 30), hm(8, 30)],
+  shanghai: [hm(8, 30), hm(8, 30)],
+  hongkong: [hm(8, 10), hm(8, 10)],
+  singapore: [hm(8, 30), hm(8, 30)],
+  // Europe
+  london: [hm(8, 20), hm(8, 20)],
+  munich: [hm(8, 20), hm(8, 20)],
+  milan: [hm(8, 20), hm(8, 20)],
+  amsterdam: [hm(8, 25), hm(8, 25)],
+  madrid: [hm(8, 30), hm(8, 30)],
+  paris: [hm(8, 30), hm(8, 30)],
+  // US (first prediction varies 8:15-8:25 AM)
+  sanfrancisco: [hm(8, 15), hm(8, 25)],
+  seattle: [hm(8, 15), hm(8, 25)],
+  losangeles: [hm(8, 15), hm(8, 25)],
+  nyc: [hm(8, 15), hm(8, 25)],
+  newyork: [hm(8, 15), hm(8, 25)],
+  newyorkcity: [hm(8, 15), hm(8, 25)],
+  atlanta: [hm(8, 15), hm(8, 25)],
+  miami: [hm(8, 15), hm(8, 25)],
+};
+
+interface RawTickLite {
+  city: string;
+  local_date: string;
+  bracket: string | null;
+  pacing_time: string | null;
+  captured_at: string | Date | null;
+}
+
+interface FirstPrediction {
+  bracket: string;
+  minutes: number;
+  captured_at: string;
+}
+
+function normCityKey(city: string): string {
+  return String(city ?? "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+}
+
+/** "8:30 AM" → minutes since local midnight. Never compare pacing_time as a string. */
+function pacingTimeToMinutes(pt: string | null): number | null {
+  if (!pt) return null;
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(String(pt).trim());
+  if (!m) return null;
+  let hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  const meridiem = m[3].toUpperCase();
+  if (meridiem === "PM" && hour !== 12) hour += 12;
+  if (meridiem === "AM" && hour === 12) hour = 0;
+  return hour * 60 + minute;
+}
+
+function capKey(v: string | Date | null): string {
+  if (v == null) return "";
+  return typeof v === "string" ? v : v instanceof Date ? v.toISOString() : String(v);
+}
+
+async function fetchRawTicks(collectionName: string): Promise<RawTickLite[]> {
+  const db = await getDb();
+  return (await db
+    .collection(collectionName)
+    .find(
+      { bracket: { $ne: null, $exists: true } },
+      {
+        projection: {
+          city: 1,
+          local_date: 1,
+          bracket: 1,
+          pacing_time: 1,
+          captured_at: 1,
+        },
+      }
+    )
+    .toArray()) as unknown as RawTickLite[];
+}
+
+/** Each city-day's earliest tick (by parsed pacing_time) that falls inside the city's window. */
+function firstPredictionsInWindow(ticks: RawTickLite[]): Map<string, FirstPrediction> {
+  const earliest = new Map<string, FirstPrediction>();
+  for (const t of ticks) {
+    if (t.bracket == null) continue;
+    const bracket = String(t.bracket).trim();
+    if (!bracket) continue;
+    const minutes = pacingTimeToMinutes(t.pacing_time);
+    if (minutes === null) continue;
+
+    const key = `${t.city}|${t.local_date}`;
+    const ca = capKey(t.captured_at);
+    const cur = earliest.get(key);
+    if (
+      !cur ||
+      minutes < cur.minutes ||
+      (minutes === cur.minutes && ca < cur.captured_at)
+    ) {
+      earliest.set(key, { bracket, minutes, captured_at: ca });
+    }
+  }
+
+  // The earliest tick of the day must be inside the city's window, else skip the day.
+  const valid = new Map<string, FirstPrediction>();
+  for (const [key, fp] of earliest) {
+    const city = key.slice(0, key.indexOf("|"));
+    const win = FIRST_TICK_WINDOWS[normCityKey(city)];
+    if (!win) continue; // unknown city
+    if (fp.minutes < win[0] || fp.minutes > win[1]) continue; // missed / out of window
+    valid.set(key, fp);
+  }
+  return valid;
+}
+
+/**
+ * Builds the set of allowed row keys "city|date|method|bracket" — exactly one per
+ * valid city-day and method.
+ */
+async function computeAllowedFirstPredictionKeys(): Promise<Set<string>> {
+  const [linearTicks, reciprocalTicks] = await Promise.all([
+    fetchRawTicks("high-temp"),
+    fetchRawTicks("reciprocal"),
+  ]);
+
+  const linear = firstPredictionsInWindow(linearTicks);
+  const reciprocal = firstPredictionsInWindow(reciprocalTicks);
+
+  const allowed = new Set<string>();
+  for (const [cdKey, fp] of linear) {
+    allowed.add(`${cdKey}|linear|${fp.bracket}`);
+  }
+  for (const [cdKey, fp] of reciprocal) {
+    allowed.add(`${cdKey}|reciprocal|${fp.bracket}`);
+  }
+  // combined: both methods valid AND same bracket
+  for (const [cdKey, lf] of linear) {
+    const rf = reciprocal.get(cdKey);
+    if (rf && rf.bracket === lf.bracket) {
+      allowed.add(`${cdKey}|combined|${lf.bracket}`);
+    }
+  }
+  return allowed;
+}
+
+// Cached so a stats-page load doesn't rescan the raw tick collections every time.
+const FIRST_PRED_TTL_MS = 5 * 60 * 1000;
+let firstPredCache: { at: number; allowed: Set<string> } | null = null;
+let firstPredInflight: Promise<Set<string>> | null = null;
+
+async function getAllowedFirstPredictionKeys(): Promise<Set<string>> {
+  const now = Date.now();
+  if (firstPredCache && now - firstPredCache.at < FIRST_PRED_TTL_MS) {
+    return firstPredCache.allowed;
+  }
+  if (!firstPredInflight) {
+    firstPredInflight = computeAllowedFirstPredictionKeys()
+      .then((allowed) => {
+        firstPredCache = { at: Date.now(), allowed };
+        return allowed;
+      })
+      .finally(() => {
+        firstPredInflight = null;
+      });
+  }
+  try {
+    return await firstPredInflight;
+  } catch (err) {
+    // Prefer slightly stale data over failing the whole page.
+    if (firstPredCache) return firstPredCache.allowed;
+    throw err;
+  }
+}
+
+function rowKey(row: FeatureRow): string {
+  return `${row.city}|${row.local_date}|${row.method}|${String(row.bracket).trim()}`;
+}
+
+// ---------------------------------------------------------------------------
 // Aggregator
 // ---------------------------------------------------------------------------
 
@@ -469,6 +685,26 @@ function buildMongoMatch(filters: StatsFilters): Record<string, unknown> {
   return match;
 }
 
+/**
+ * Loads the candidate `stats_features` rows for a filter set. When a first-tick
+ * dimension is selected, keeps only the first-prediction row of each city-day/method.
+ * Shared by `aggregate()` and `getRowsForBucket()` so the table and the drill-down
+ * always see the same rows.
+ */
+async function loadFeatureRows(
+  match: Record<string, unknown>,
+  dimensions: DimensionSpec[]
+): Promise<FeatureRow[]> {
+  const db = await getDb();
+  const col = db.collection<FeatureRow>("stats_features");
+  const rows = (await col.find(match).toArray()) as unknown as FeatureRow[];
+  if (!FIRST_PREDICTION_ONLY) return rows;
+  if (!dimensions.some((d) => FIRST_TICK_DIMENSION_IDS.has(d.id))) return rows;
+
+  const allowed = await getAllowedFirstPredictionKeys();
+  return rows.filter((r) => allowed.has(rowKey(r)));
+}
+
 export async function aggregate(
   filters: StatsFilters,
   dimensions: DimensionSpec[]
@@ -482,7 +718,7 @@ export async function aggregate(
 
   const match = buildMongoMatch(filters);
 
-  const rows = (await col.find(match).toArray()) as unknown as FeatureRow[];
+  const rows = await loadFeatureRows(match, dimensions);
   const totalRows = rows.length;
 
   // Latest computed_at across all docs in this collection (not filter-scoped)
@@ -605,7 +841,7 @@ export async function getRowsForBucket(
   const col = db.collection<FeatureRow>("stats_features");
 
   const match = buildMongoMatch(filters);
-  const rows = (await col.find(match).toArray()) as unknown as FeatureRow[];
+  const rows = await loadFeatureRows(match, dimensions);
 
   // Resolve all dimension defs up front
   const dimDefs = dimensions.map((spec) => {
@@ -630,6 +866,10 @@ export async function getRowsForBucket(
 
   // Resolve winning_bracket per (city, local_date, method) with a single
   // secondary query rather than one lookup per row.
+  // NOTE: this deliberately queries stats_features directly (NOT through the
+  // first-prediction filter): the winning bracket's doc is usually a different
+  // bracket than the first-predicted one, and we still need it for the
+  // "Winning Bracket" column on losing days.
   const cities = new Set<string>();
   const dates = new Set<string>();
   const methods = new Set<FeatureRow["method"]>();
