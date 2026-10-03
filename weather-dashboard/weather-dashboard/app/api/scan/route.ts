@@ -10,18 +10,25 @@
  *   criteriaKey The composite bucket key from the Stats row being matched,
  *               e.g. "lm:4:moderate|rt:4:rising"  (pipe-separated parts)
  *   cities      Comma-separated city list (optional — defaults to all cities)
- *   method      "linear"|"reciprocal"|"combined"  (default "combined")
+ *   method      "linear"|"reciprocal"|"combined"|"all"  (default "combined")
+ *
+ * Which methods are scanned:
+ *   1. The criteria has a Method part (e.g. "method:linear")  → that method only.
+ *   2. method=all (the "All methods" filter)                  → linear, reciprocal
+ *      AND combined are all scanned, and the matches are merged into one list.
+ *   3. Otherwise                                              → the method in the URL.
  *
  * Response:
  *   {
  *     scanned_at: string,
  *     criteria_label: string,
  *     criteria_key: string,
- *     method: string,
+ *     method: string,               // "all" when more than one method was scanned
+ *     methods_scanned: string[],
  *     cities_scanned: string[],
  *     match_count: number,
  *     matches: [{
- *       city, bracket, local_date, local_time,
+ *       city, bracket, local_date, local_time, method,
  *       tick_count, lead_margin_pct, rank_now, rank_prev
  *     }]
  *   }
@@ -32,6 +39,7 @@ import { getLiveFeatures } from "@/lib/live-features";
 import {
   DIMENSION_REGISTRY_MAP,
   type DimensionSpec,
+  type FeatureRow,
 } from "@/lib/stats-aggregator";
 import { CITIES, getCityConfig } from "@/lib/cities-config";
 
@@ -53,6 +61,24 @@ const CONFIG_KEY_MAP: Record<string, string> = {
 // Same ids as FIRST_TICK_DIMENSION_IDS in lib/stats-aggregator.ts.
 // When one of these is in the scan, only the FIRST prediction of the day counts.
 const FIRST_TICK_DIMENSION_IDS = new Set(["price", "first_tick_hour"]);
+
+// The three real methods. "all" is NOT a method — it means "scan all three".
+const ALL_METHODS = ["linear", "reciprocal", "combined"] as const;
+type ScanMethod = (typeof ALL_METHODS)[number];
+const isMethod = (v: string): v is ScanMethod =>
+  (ALL_METHODS as readonly string[]).includes(v);
+
+interface ScanMatch {
+  city: string;
+  bracket: string;
+  local_date: string;
+  local_time: string;
+  method: ScanMethod;
+  tick_count: number;
+  lead_margin_pct: number | null;
+  rank_now: number | null;
+  rank_prev: number | null;
+}
 
 function parseDimensions(byParam: string | null): DimensionSpec[] {
   if (!byParam?.trim()) return [];
@@ -136,10 +162,23 @@ export async function GET(req: NextRequest) {
   const citiesToScan =
     rawCities.length > 0 ? rawCities : CITIES.map((c) => c.city);
 
-  const method = (sp.get("method") ?? "combined") as
-    | "linear"
-    | "reciprocal"
-    | "combined";
+  // ---- Decide which method(s) to scan ----
+  const methodParam = (sp.get("method") ?? "combined").trim().toLowerCase();
+
+  const methodIdx = dimensions.findIndex((d) => d.id === "method");
+  const keyMethod =
+    methodIdx !== -1 ? targetParts[methodIdx].replace("method:", "") : null;
+
+  let methodsToScan: ScanMethod[];
+  if (keyMethod !== null && isMethod(keyMethod)) {
+    // The pinned row has a Method part — it decides.
+    methodsToScan = [keyMethod];
+  } else if (methodParam === "all") {
+    // "All methods" — scan every method and merge the matches.
+    methodsToScan = [...ALL_METHODS];
+  } else {
+    methodsToScan = [isMethod(methodParam) ? methodParam : "combined"];
+  }
 
   // Resolve dimension defs (throws if unknown id)
   let dimDefs: Array<{
@@ -175,14 +214,19 @@ export async function GET(req: NextRequest) {
     FIRST_TICK_DIMENSION_IDS.has(d.id)
   );
 
-  // Fetch live feature rows for today
-  let liveRows;
+  // Fetch live feature rows for today — one call per method, in parallel
+  let scanned: Array<{ method: ScanMethod; rows: FeatureRow[] }>;
   try {
-    liveRows = await getLiveFeatures({
-      cities: citiesToScan,
-      method,
-      firstPredictionOnly,
-    });
+    scanned = await Promise.all(
+      methodsToScan.map(async (m) => ({
+        method: m,
+        rows: await getLiveFeatures({
+          cities: citiesToScan,
+          method: m,
+          firstPredictionOnly,
+        }),
+      }))
+    );
   } catch (err) {
     return NextResponse.json(
       {
@@ -192,62 +236,64 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Match rows against criteria
-  const matches: Array<{
-    city: string;
-    bracket: string;
-    local_date: string;
-    local_time: string;
-    tick_count: number;
-    lead_margin_pct: number | null;
-    rank_now: number | null;
-    rank_prev: number | null;
-  }> = [];
+  // Match rows against criteria — every method's rows go into ONE merged list
+  const matches: ScanMatch[] = [];
 
-  for (const row of liveRows) {
-    // Check all dimension bucket keys against target
-    let matched = true;
-    for (let i = 0; i < dimDefs.length; i++) {
-      const bucketKey = dimDefs[i].def.bucket(row, dimDefs[i].config);
-      if (bucketKey !== targetParts[i]) {
-        matched = false;
-        break;
+  for (const { method: rowMethod, rows } of scanned) {
+    for (const row of rows) {
+      // Check all dimension bucket keys against target
+      let matched = true;
+      for (let i = 0; i < dimDefs.length; i++) {
+        const bucketKey = dimDefs[i].def.bucket(row, dimDefs[i].config);
+        if (bucketKey !== targetParts[i]) {
+          matched = false;
+          break;
+        }
       }
+      if (!matched) continue;
+
+      // Local time for this city
+      const cfg = getCityConfig(row.city);
+      const tz = cfg?.timezone ?? "UTC";
+      const timeFmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        hour: "numeric",
+        minute: "numeric",
+        hour12: false,
+      });
+      const localTime = timeFmt.format(new Date()).replace(/^24:/, "00:");
+
+      // Extract display signals
+      const tickCount = row.tick_count_through_hour[criteriaHour] ?? 0;
+      const leadMarginRaw = row.lead_margin_through_hour?.[criteriaHour] ?? null;
+      const lead_margin_pct =
+        tickCount > 0 && leadMarginRaw !== null
+          ? Math.round(leadMarginRaw * 1000) / 10
+          : null;
+      const rank_now = row.rank_through_hour[criteriaHour] ?? null;
+      const rank_prev = row.rank_through_hour[prevHour] ?? null;
+
+      matches.push({
+        city: row.city,
+        bracket: row.bracket,
+        local_date: row.local_date,
+        local_time: localTime,
+        method: rowMethod,
+        tick_count: tickCount,
+        lead_margin_pct,
+        rank_now,
+        rank_prev,
+      });
     }
-    if (!matched) continue;
-
-    // Local time for this city
-    const cfg = getCityConfig(row.city);
-    const tz = cfg?.timezone ?? "UTC";
-    const timeFmt = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hour: "numeric",
-      minute: "numeric",
-      hour12: false,
-    });
-    const localTime = timeFmt.format(new Date()).replace(/^24:/, "00:");
-
-    // Extract display signals
-    const tickCount = row.tick_count_through_hour[criteriaHour] ?? 0;
-    const leadMarginRaw = row.lead_margin_through_hour?.[criteriaHour] ?? null;
-    const lead_margin_pct =
-      tickCount > 0 && leadMarginRaw !== null
-        ? Math.round(leadMarginRaw * 1000) / 10
-        : null;
-    const rank_now = row.rank_through_hour[criteriaHour] ?? null;
-    const rank_prev = row.rank_through_hour[prevHour] ?? null;
-
-    matches.push({
-      city: row.city,
-      bracket: row.bracket,
-      local_date: row.local_date,
-      local_time: localTime,
-      tick_count: tickCount,
-      lead_margin_pct,
-      rank_now,
-      rank_prev,
-    });
   }
+
+  // Tidy order: city, then bracket, then method (linear → reciprocal → combined)
+  matches.sort(
+    (a, b) =>
+      a.city.localeCompare(b.city) ||
+      a.bracket.localeCompare(b.bracket) ||
+      ALL_METHODS.indexOf(a.method) - ALL_METHODS.indexOf(b.method)
+  );
 
   // Build human-readable criteria label
   const criteria_label = dimDefs
@@ -258,7 +304,8 @@ export async function GET(req: NextRequest) {
     scanned_at: new Date().toISOString(),
     criteria_label,
     criteria_key: criteriaKey,
-    method,
+    method: methodsToScan.length > 1 ? "all" : methodsToScan[0],
+    methods_scanned: methodsToScan,
     cities_scanned: citiesToScan,
     match_count: matches.length,
     matches,

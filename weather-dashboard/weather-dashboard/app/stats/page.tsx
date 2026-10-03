@@ -103,6 +103,7 @@ interface PinnedCriteria {
 interface ScanMatch {
   city: string;
   bracket: string;
+  method: string;
   local_date: string;
   local_time: string;
   tick_count: number;
@@ -1490,11 +1491,12 @@ export default function StatsExplorerPage() {
                                 : null;
                             return (
                               <div
-                                key={`${m.city}|${m.bracket}`}
+                                key={`${m.city}|${m.bracket}|${m.method}`}
                                 className="min-w-36 rounded-lg border border-[#22c98a]/30 bg-[#22c98a]/10 px-3 py-2 text-xs"
                               >
                                 <div className="font-semibold capitalize text-white">{m.city}</div>
                                 <div className="font-mono text-[#38a3f5]">{m.bracket}</div>
+                                <div className="text-[10px] uppercase tracking-wide text-[#8a97b1]">{m.method}</div>
                                 <div className="mt-1 text-[#8a97b1]">
                                   {m.local_time} · {m.tick_count}T
                                 </div>
