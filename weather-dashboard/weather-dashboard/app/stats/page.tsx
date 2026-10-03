@@ -1458,7 +1458,12 @@ export default function StatsExplorerPage() {
                   return (
                     <div key={c.key}>
                       {/* Per-criteria sub-header */}
-                      <div className="mb-2 flex items-center gap-2">
+                      <div className="mb-2 flex flex-wrap items-center gap-2">
+                        {/* Tag: shows which pinned criteria made this result */}
+                        <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#22c98a]/40 bg-[#22c98a]/10 px-2 py-1 text-xs">
+                          <span className="capitalize text-[#8a97b1]">{c.method}:</span>
+                          <span className="font-mono text-white">{c.label}</span>
+                        </span>
                         <span
                           className={`font-mono text-xs font-semibold ${
                             result.match_count > 0 ? "text-[#22d38a]" : "text-[#8a97b1]"
