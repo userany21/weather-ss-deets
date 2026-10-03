@@ -39,6 +39,14 @@ interface BracketAccum {
   firstCapturedAtPerHour: (string | null)[];
 }
 
+interface FirstPrediction {
+  bracket: string;
+  minutes: number;
+  captured_at: string;
+  pacing_time: string | null;
+  yes_price_cents: number | null;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers (mirrors build-feature-table.js)
 // ---------------------------------------------------------------------------
@@ -59,6 +67,122 @@ function capAt(doc: RawTick): string {
   return typeof doc.captured_at === "string"
     ? doc.captured_at
     : (doc.captured_at as Date).toISOString();
+}
+
+// ---------------------------------------------------------------------------
+// First-prediction selection (used only when `firstPredictionOnly` is set)
+// KEEP IN SYNC with the same block in lib/stats-aggregator.ts
+// ---------------------------------------------------------------------------
+
+const hm = (h: number, m: number): number => h * 60 + m;
+
+/**
+ * Per-city window [start, end] (minutes since local midnight) in which the day's
+ * first prediction must land. Keys are normalised city names (lowercase, letters
+ * only), so "hong kong", "hong-kong" and "Hong_Kong" all resolve to "hongkong".
+ */
+const FIRST_TICK_WINDOWS: Record<string, [number, number]> = {
+  // Asia
+  tokyo: [hm(8, 30), hm(8, 30)],
+  shenzhen: [hm(9, 0), hm(9, 0)],
+  seoul: [hm(8, 30), hm(8, 30)],
+  beijing: [hm(8, 30), hm(8, 30)],
+  shanghai: [hm(8, 30), hm(8, 30)],
+  hongkong: [hm(8, 10), hm(8, 10)],
+  singapore: [hm(8, 30), hm(8, 30)],
+  // Europe
+  london: [hm(8, 20), hm(8, 20)],
+  munich: [hm(8, 20), hm(8, 20)],
+  milan: [hm(8, 20), hm(8, 20)],
+  amsterdam: [hm(8, 25), hm(8, 25)],
+  madrid: [hm(8, 30), hm(8, 30)],
+  paris: [hm(8, 30), hm(8, 30)],
+  // US (first prediction varies 8:15-8:25 AM)
+  sanfrancisco: [hm(8, 15), hm(8, 25)],
+  seattle: [hm(8, 15), hm(8, 25)],
+  losangeles: [hm(8, 15), hm(8, 25)],
+  nyc: [hm(8, 15), hm(8, 25)],
+  newyork: [hm(8, 15), hm(8, 25)],
+  newyorkcity: [hm(8, 15), hm(8, 25)],
+  atlanta: [hm(8, 15), hm(8, 25)],
+  miami: [hm(8, 15), hm(8, 25)],
+};
+
+function normCityKey(city: string): string {
+  return String(city ?? "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+}
+
+/** "8:30 AM" → minutes since local midnight. Never compare pacing_time as a string. */
+function pacingTimeToMinutes(pt: string | null): number | null {
+  if (!pt) return null;
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(String(pt).trim());
+  if (!m) return null;
+  let hour = parseInt(m[1], 10);
+  const minute = parseInt(m[2], 10);
+  const meridiem = m[3].toUpperCase();
+  if (meridiem === "PM" && hour !== 12) hour += 12;
+  if (meridiem === "AM" && hour === 12) hour = 0;
+  return hour * 60 + minute;
+}
+
+/**
+ * Each city-day's earliest tick by parsed pacing_time (tie → earlier captured_at),
+ * kept only if it falls inside the city's first-tick window.
+ */
+function validFirstPredictions(docs: RawTick[]): Map<string, FirstPrediction> {
+  const earliest = new Map<string, FirstPrediction>();
+  for (const doc of docs) {
+    if (!doc.bracket) continue;
+    const minutes = pacingTimeToMinutes(doc.pacing_time);
+    if (minutes === null) continue;
+
+    const key = `${doc.city}|${doc.local_date}`;
+    const ca = capAt(doc);
+    const cur = earliest.get(key);
+    if (
+      !cur ||
+      minutes < cur.minutes ||
+      (minutes === cur.minutes && ca < cur.captured_at)
+    ) {
+      earliest.set(key, {
+        bracket: doc.bracket,
+        minutes,
+        captured_at: ca,
+        pacing_time: doc.pacing_time,
+        yes_price_cents:
+          typeof doc.yes_price_cents === "number" ? doc.yes_price_cents : null,
+      });
+    }
+  }
+
+  const valid = new Map<string, FirstPrediction>();
+  for (const [key, fp] of earliest) {
+    const city = key.slice(0, key.indexOf("|"));
+    const win = FIRST_TICK_WINDOWS[normCityKey(city)];
+    if (!win) continue; // unknown city → skip
+    if (fp.minutes < win[0] || fp.minutes > win[1]) continue; // missed / out of window → skip
+    valid.set(key, fp);
+  }
+  return valid;
+}
+
+/**
+ * combined: only when BOTH methods have a valid first prediction on the SAME
+ * bracket. First tick used = whichever of the two was captured earlier.
+ */
+function alignCombined(
+  linearValid: Map<string, FirstPrediction>,
+  reciprocalValid: Map<string, FirstPrediction>
+): Map<string, FirstPrediction> {
+  const out = new Map<string, FirstPrediction>();
+  for (const [key, lf] of linearValid) {
+    const rf = reciprocalValid.get(key);
+    if (!rf || lf.bracket !== rf.bracket) continue;
+    out.set(key, rf.captured_at < lf.captured_at ? rf : lf);
+  }
+  return out;
 }
 
 /** Build per-bracket accumulator map from raw tick docs. */
@@ -187,15 +311,24 @@ function mergeBracketData(
 /**
  * Compute FeatureRow-shaped objects from a bracket data map.
  * resolved/won/edge_cents are always null (today is in-progress).
+ *
+ * When `firstMap` is given, only the first-predicted bracket of each city-day gets a
+ * row (and city-days without a valid first prediction get none). Its first-tick
+ * price/hour come from that first prediction. Without `firstMap`, behaviour is
+ * unchanged: one row per bracket.
  */
 function buildFeatureRows(
   bracketData: Map<string, Map<string, BracketAccum>>,
-  method: "linear" | "reciprocal" | "combined"
+  method: "linear" | "reciprocal" | "combined",
+  firstMap: Map<string, FirstPrediction> | null
 ): FeatureRow[] {
   const rows: FeatureRow[] = [];
   const now = new Date();
 
   for (const [cdKey, brackets] of bracketData) {
+    const fp = firstMap ? firstMap.get(cdKey) ?? null : null;
+    if (firstMap && !fp) continue; // no valid first prediction → no row
+
     const pipeIdx = cdKey.indexOf("|");
     const city = cdKey.slice(0, pipeIdx);
     const local_date = cdKey.slice(pipeIdx + 1);
@@ -236,6 +369,8 @@ function buildFeatureRows(
 
     // Per-bracket signals
     for (const [bracket, br] of bracketsArr) {
+      if (fp && bracket !== fp.bracket) continue; // first-prediction mode: one bracket only
+
       const cum = cumByBracket.get(bracket)!;
 
       const rank_through_hour: (number | null)[] = new Array(NUM_HOUR_BUCKETS).fill(null);
@@ -256,7 +391,7 @@ function buildFeatureRows(
         is_leader_through_hour[n] = myCount > 0 && myCount === maxCount;
       }
 
-      const ft = br.firstTick;
+      const ft = fp ?? br.firstTick;
       const first_tick_price_cents = ft?.yes_price_cents ?? null;
       const first_tick_hour = ft?.pacing_time
         ? pacingTimeToBucket(ft.pacing_time)
@@ -297,17 +432,24 @@ export interface LiveFeatureOptions {
   cities: string[];
   /** Defaults to "combined" */
   method?: "linear" | "reciprocal" | "combined";
+  /**
+   * When true, return only the first-predicted bracket per city (combined: only when
+   * high-temp and reciprocal agree). Set it when the scan uses First-Tick Price or
+   * First-Tick Hour. Default false = one row per bracket, as before.
+   */
+  firstPredictionOnly?: boolean;
 }
 
 /**
  * Fetch today's in-progress feature rows for the given cities.
  * Uses each city's IANA timezone to determine "today's" local date.
- * Returns one FeatureRow per (city, bracket) for the requested method.
+ * Returns one FeatureRow per (city, bracket) for the requested method
+ * (or one per city when `firstPredictionOnly` is set).
  */
 export async function getLiveFeatures(
   opts: LiveFeatureOptions
 ): Promise<FeatureRow[]> {
-  const { method = "combined" } = opts;
+  const { method = "combined", firstPredictionOnly = false } = opts;
   const cities =
     opts.cities.length > 0 ? opts.cities : CITIES.map((c) => c.city);
 
@@ -359,10 +501,11 @@ export async function getLiveFeatures(
       : Promise.resolve([]),
   ]);
 
-  const linearData = buildBracketData(linearDocs as unknown as RawTick[]);
-  const reciprocalData = buildBracketData(
-    reciprocalDocs as unknown as RawTick[]
-  );
+  const linearTicks = linearDocs as unknown as RawTick[];
+  const reciprocalTicks = reciprocalDocs as unknown as RawTick[];
+
+  const linearData = buildBracketData(linearTicks);
+  const reciprocalData = buildBracketData(reciprocalTicks);
 
   let bracketData: Map<string, Map<string, BracketAccum>>;
   if (method === "linear") {
@@ -373,5 +516,19 @@ export async function getLiveFeatures(
     bracketData = mergeBracketData(linearData, reciprocalData);
   }
 
-  return buildFeatureRows(bracketData, method);
+  let firstMap: Map<string, FirstPrediction> | null = null;
+  if (firstPredictionOnly) {
+    if (method === "linear") {
+      firstMap = validFirstPredictions(linearTicks);
+    } else if (method === "reciprocal") {
+      firstMap = validFirstPredictions(reciprocalTicks);
+    } else {
+      firstMap = alignCombined(
+        validFirstPredictions(linearTicks),
+        validFirstPredictions(reciprocalTicks)
+      );
+    }
+  }
+
+  return buildFeatureRows(bracketData, method, firstMap);
 }

@@ -50,6 +50,10 @@ const CONFIG_KEY_MAP: Record<string, string> = {
   rank_trend: "n",
 };
 
+// Same ids as FIRST_TICK_DIMENSION_IDS in lib/stats-aggregator.ts.
+// When one of these is in the scan, only the FIRST prediction of the day counts.
+const FIRST_TICK_DIMENSION_IDS = new Set(["price", "first_tick_hour"]);
+
 function parseDimensions(byParam: string | null): DimensionSpec[] {
   if (!byParam?.trim()) return [];
   return byParam
@@ -166,10 +170,19 @@ export async function GET(req: NextRequest) {
   }
   const prevHour = Math.max(0, criteriaHour - 2); // 2-hour lookback (matches rank_trend)
 
+  // First-tick dimensions only make sense for the FIRST prediction of the day
+  const firstPredictionOnly = dimensions.some((d) =>
+    FIRST_TICK_DIMENSION_IDS.has(d.id)
+  );
+
   // Fetch live feature rows for today
   let liveRows;
   try {
-    liveRows = await getLiveFeatures({ cities: citiesToScan, method });
+    liveRows = await getLiveFeatures({
+      cities: citiesToScan,
+      method,
+      firstPredictionOnly,
+    });
   } catch (err) {
     return NextResponse.json(
       {
