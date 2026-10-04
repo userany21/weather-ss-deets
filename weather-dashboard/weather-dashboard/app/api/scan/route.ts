@@ -38,6 +38,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLiveFeatures } from "@/lib/live-features";
 import {
   DIMENSION_REGISTRY_MAP,
+  resolveEntry,
+  entryFor,
+  entryLabel,
   type DimensionSpec,
   type FeatureRow,
 } from "@/lib/stats-aggregator";
@@ -74,6 +77,8 @@ interface ScanMatch {
   local_date: string;
   local_time: string;
   method: ScanMethod;
+  entry_price_cents: number | null;
+  entry_label: string;
   tick_count: number;
   lead_margin_pct: number | null;
   rank_now: number | null;
@@ -198,15 +203,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Infer criteria hour from any dimension that uses "n" config
-  // (used to extract display signals — lead margin %, rank trend)
-  let criteriaHour = 4; // default to 12PM
-  for (const { def, config } of dimDefs) {
-    if (def.configSchema?.key === "n" && typeof config.n === "number") {
-      criteriaHour = Math.min(Math.max(Math.round(config.n), 0), 9);
-      break;
-    }
-  }
+  // Entry rule — the SAME function the Stats table uses, so scan and backtest
+  // cannot drift. Entry hour = latest hour used by any filter.
+  const entry = resolveEntry(dimensions);
+  const entryText = entryLabel(entry);
+  // Hour used for the display signals (lead margin %, rank trend)
+  const criteriaHour = entry.kind === "hour" ? entry.n : 4;
   const prevHour = Math.max(0, criteriaHour - 2); // 2-hour lookback (matches rank_trend)
 
   // First-tick dimensions only make sense for the FIRST prediction of the day
@@ -252,6 +254,11 @@ export async function GET(req: NextRequest) {
       }
       if (!matched) continue;
 
+      // Entry price at the same moment as the filters. No price = could not buy it,
+      // so it is not a match (same rule as the Stats table).
+      const { price: entryPrice } = entryFor(row, entry);
+      if (entry.kind !== "none" && entryPrice == null) continue;
+
       // Local time for this city
       const cfg = getCityConfig(row.city);
       const tz = cfg?.timezone ?? "UTC";
@@ -279,6 +286,8 @@ export async function GET(req: NextRequest) {
         local_date: row.local_date,
         local_time: localTime,
         method: rowMethod,
+        entry_price_cents: entryPrice,
+        entry_label: entryText,
         tick_count: tickCount,
         lead_margin_pct,
         rank_now,

@@ -55,6 +55,13 @@ export interface DimensionConfigSchema {
 export interface DimensionDef {
   id: string;
   label: string;
+  /**
+   * When the information behind this dimension becomes known:
+   *   "hour"       – at hour N (config.n): you can only enter at hour N or later
+   *   "end_of_day" – only after the day ends: no valid entry time exists
+   *   (omitted)    – known at or before the first tick of the day
+   */
+  timing?: "hour" | "end_of_day";
   configSchema?: DimensionConfigSchema;
   bucket(row: FeatureRow, config: Record<string, number>): string | null;
   bucketLabel(key: string, config: Record<string, number>): string;
@@ -90,7 +97,12 @@ export interface DrillRow {
   bracket: string;
   method: string;
   first_tick_price_cents: number | null;
+  /** Price used for the edge: the entry price at the same moment as the filters. */
+  entry_price_cents: number | null;
+  /** e.g. "1PM price" or "first-tick price" */
+  entry_label: string;
   won: boolean | null;
+  /** Edge at the entry price above (not at the first-tick price). */
   edge_cents: number | null;
   final_rank: number | null;
   resolved: boolean;
@@ -148,6 +160,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   {
     id: "leader",
     label: "Hour-N Leader",
+    timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
@@ -203,6 +216,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   {
     id: "final_rank",
     label: "Final Rank",
+    timing: "end_of_day",
     bucket(row) {
       if (row.final_rank == null) return null;
       return `final_rank:${clampRank(row.final_rank)}`;
@@ -271,6 +285,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   {
     id: "rank_at_hour",
     label: "Rank at Hour-N",
+    timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
@@ -297,6 +312,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   {
     id: "price_at_hour",
     label: "Price at Hour-N",
+    timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
@@ -326,6 +342,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   {
     id: "lead_margin",
     label: "Lead Margin at Hour-N",
+    timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
@@ -363,6 +380,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   {
     id: "rank_trend",
     label: "Rank Trend at Hour-N",
+    timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
@@ -400,6 +418,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   {
     id: "final_tick_count",
     label: "Final Tick Count",
+    timing: "end_of_day",
     bucket(row) {
       const c = row.final_tick_count;
       if (!c) return null;
@@ -429,8 +448,65 @@ export function serializeRegistry() {
   return DIMENSION_REGISTRY.map((d) => ({
     id: d.id,
     label: d.label,
+    timing: d.timing ?? null,
     configSchema: d.configSchema ?? null,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Entry rule — price and edge from the SAME moment as the filters
+// ---------------------------------------------------------------------------
+
+export type Entry =
+  | { kind: "first_tick" }
+  | { kind: "hour"; n: number }
+  | { kind: "none" }; // a filter uses end-of-day data: no tradeable entry exists
+
+/**
+ * You can only buy at or after the latest moment any filter needs.
+ *   - any end-of-day dimension → no entry (edge is not defined)
+ *   - any hour-N dimension     → hour max(N)
+ *   - otherwise                → first tick of the day
+ * The Live Scanner calls this same function, so scan and backtest cannot drift.
+ */
+export function resolveEntry(dimensions: DimensionSpec[]): Entry {
+  let hour = -1;
+  for (const spec of dimensions) {
+    const def = DIMENSION_REGISTRY_MAP.get(spec.id);
+    if (!def?.timing) continue;
+    if (def.timing === "end_of_day") return { kind: "none" };
+    const key = def.configSchema?.key ?? "n";
+    const n = spec.config[key] ?? def.configSchema?.default ?? 0;
+    hour = Math.max(hour, clampHour(n));
+  }
+  return hour >= 0 ? { kind: "hour", n: hour } : { kind: "first_tick" };
+}
+
+export function entryLabel(entry: Entry): string {
+  if (entry.kind === "hour") return `${HOUR_LABELS[entry.n] ?? `H${entry.n}`} price`;
+  if (entry.kind === "first_tick") return "first-tick price";
+  return "none (end-of-day filter)";
+}
+
+function edgeFor(row: FeatureRow, price: number | null): number | null {
+  if (price == null || !row.resolved || row.won == null) return null;
+  return row.won ? 100 - price : -price;
+}
+
+/** Entry price + edge for one row under the given entry rule. */
+export function entryFor(
+  row: FeatureRow,
+  entry: Entry
+): { price: number | null; edge: number | null } {
+  let price: number | null = null;
+  if (entry.kind === "hour") {
+    price = row.price_at_hour?.[entry.n] ?? null;
+  } else if (entry.kind === "first_tick") {
+    price = row.has_price ? row.first_tick_price_cents : null;
+  } else {
+    return { price: null, edge: null };
+  }
+  return { price, edge: edgeFor(row, price) };
 }
 
 // ---------------------------------------------------------------------------
@@ -740,6 +816,8 @@ export async function aggregate(
     return { def, config: spec.config };
   });
 
+  const entry = resolveEntry(dimensions);
+
   // Group rows into buckets
   const bucketMap = new Map<
     string,
@@ -759,6 +837,12 @@ export async function aggregate(
     }
     if (exclude) continue;
 
+    // Entry price + edge come from the SAME moment as the filters (see resolveEntry).
+    // A row with no entry price could not have been bought, so it is skipped:
+    // Count, Win Rate and Avg Edge all use the same rows.
+    const { price: entryPrice, edge: entryEdge } = entryFor(row, entry);
+    if (entry.kind !== "none" && entryPrice == null) continue;
+
     const key = parts.join("|");
     if (!bucketMap.has(key)) {
       bucketMap.set(key, { count: 0, wins: 0, resolved: 0, edgeSum: 0, edgeCount: 0 });
@@ -769,8 +853,8 @@ export async function aggregate(
       s.resolved++;
       if (row.won) s.wins++;
     }
-    if (row.edge_cents !== null) {
-      s.edgeSum += row.edge_cents;
+    if (entryEdge !== null) {
+      s.edgeSum += entryEdge;
       s.edgeCount++;
     }
   }
@@ -850,6 +934,8 @@ export async function getRowsForBucket(
     return { def, config: spec.config };
   });
 
+  const entry = resolveEntry(dimensions);
+
   // Keep only rows whose composite bucket key matches the target exactly
   const matched: FeatureRow[] = [];
   for (const row of rows) {
@@ -861,7 +947,10 @@ export async function getRowsForBucket(
         break;
       }
     }
-    if (isMatch) matched.push(row);
+    // Same rule as aggregate(): no entry price = not tradeable = not in the bucket
+    if (isMatch && (entry.kind === "none" || entryFor(row, entry).price != null)) {
+      matched.push(row);
+    }
   }
 
   // Resolve winning_bracket per (city, local_date, method) with a single
@@ -903,18 +992,24 @@ export async function getRowsForBucket(
     }
   }
 
-  const drillRows: DrillRow[] = matched.map((row) => ({
-    local_date: row.local_date,
-    bracket: row.bracket,
-    method: row.method,
-    first_tick_price_cents: row.first_tick_price_cents,
-    won: row.won,
-    edge_cents: row.edge_cents,
-    final_rank: row.final_rank,
-    resolved: row.resolved,
-    winning_bracket:
-      winnerMap.get(`${row.city}|${row.local_date}|${row.method}`) ?? null,
-  }));
+  const entryText = entryLabel(entry);
+  const drillRows: DrillRow[] = matched.map((row) => {
+    const { price, edge } = entryFor(row, entry);
+    return {
+      local_date: row.local_date,
+      bracket: row.bracket,
+      method: row.method,
+      first_tick_price_cents: row.first_tick_price_cents,
+      entry_price_cents: price,
+      entry_label: entryText,
+      won: row.won,
+      edge_cents: edge,
+      final_rank: row.final_rank,
+      resolved: row.resolved,
+      winning_bracket:
+        winnerMap.get(`${row.city}|${row.local_date}|${row.method}`) ?? null,
+    };
+  });
 
   // Most recent first
   drillRows.sort((a, b) => {

@@ -29,6 +29,7 @@ interface DimConfigSchema {
 interface DimMeta {
   id: string;
   label: string;
+  timing: "hour" | "end_of_day" | null;
   configSchema: DimConfigSchema | null;
 }
 interface Bucket {
@@ -58,6 +59,8 @@ interface DrillRow {
   bracket: string;
   method: string;
   first_tick_price_cents: number | null;
+  entry_price_cents: number | null;
+  entry_label: string;
   won: boolean | null;
   edge_cents: number | null;
   final_rank: number | null;
@@ -106,6 +109,8 @@ interface ScanMatch {
   method: string;
   local_date: string;
   local_time: string;
+  entry_price_cents: number | null;
+  entry_label: string;
   tick_count: number;
   lead_margin_pct: number | null;
   rank_now: number | null;
@@ -390,7 +395,7 @@ function SortArrow({
   );
 }
 
-/** Formats first_tick_price_cents for the drill sub-table (cents, no sign). */
+/** Formats an entry price (cents, no sign). */
 function fmtPrice(n: number | null): string {
   if (n == null) return "—";
   return `${n.toFixed(0)}¢`;
@@ -420,6 +425,7 @@ function DrillSubTable({
       {bucketLabel && (
         <div className="mb-2 text-[11px] text-[#5f6c86]">
           {rows.length.toLocaleString()} row{rows.length !== 1 ? "s" : ""} · {bucketLabel}
+          {rows[0]?.entry_label ? ` · edge uses the ${rows[0].entry_label}` : ""}
         </div>
       )}
       <table className="w-full border-collapse text-xs">
@@ -428,7 +434,7 @@ function DrillSubTable({
             <th className="px-2 py-1.5 text-left font-normal">Date</th>
             <th className="px-2 py-1.5 text-left font-normal">Bracket</th>
             <th className="px-2 py-1.5 text-left font-normal">Method</th>
-            <th className="px-2 py-1.5 text-right font-normal">Price</th>
+            <th className="px-2 py-1.5 text-right font-normal">Entry price</th>
             <th className="px-2 py-1.5 text-center font-normal">W/L</th>
             <th className="px-2 py-1.5 text-right font-normal">Edge</th>
             <th className="px-2 py-1.5 text-left font-normal">Winning Bracket</th>
@@ -447,7 +453,7 @@ function DrillSubTable({
                 <td className="px-2 py-1.5 font-mono text-[#c5d0e6]">{r.bracket}</td>
                 <td className="px-2 py-1.5 capitalize text-[#8a97b1]">{r.method}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums text-[#c5d0e6]">
-                  {fmtPrice(r.first_tick_price_cents)}
+                  {fmtPrice(r.entry_price_cents)}
                 </td>
                 <td className="px-2 py-1.5 text-center font-semibold">
                   {!r.resolved || r.won == null ? (
@@ -580,6 +586,24 @@ export default function StatsExplorerPage() {
   const registry: DimMeta[]    = data?.dimension_registry ?? [];
   const activeDimIds            = useMemo(() => new Set(activeDims.map((d) => d.id)), [activeDims]);
   const availableDims           = registry.filter((d) => !activeDimIds.has(d.id));
+
+  // Mirror of resolveEntry() in lib/stats-aggregator.ts, driven by registry `timing`
+  const entryNote = useMemo(() => {
+    let hour = -1;
+    for (const d of activeDims) {
+      const meta = registry.find((r) => r.id === d.id);
+      if (meta?.timing === "end_of_day") {
+        return "Edge hidden: a filter uses end-of-day data (Final Rank / Final Tick Count), so there is no valid entry time.";
+      }
+      if (meta?.timing === "hour") {
+        const key = meta.configSchema?.key ?? "n";
+        hour = Math.max(hour, d.config[key] ?? meta.configSchema?.default ?? 0);
+      }
+    }
+    return hour >= 0
+      ? `Edge = outcome − the ${HOURS[hour] ?? `H${hour}`} price (latest hour used by any filter)`
+      : "Edge = outcome − the first-tick price";
+  }, [activeDims, registry]);
 
   // ---- Dimension picker handlers ----
   const addDim = useCallback(
@@ -1224,6 +1248,7 @@ export default function StatsExplorerPage() {
               <div className="mb-2 flex items-center gap-3">
                 <ChartBoxIcon className="h-5 w-5 shrink-0 text-[#38a3f5]" />
                 <h2 className="text-[15px] font-semibold text-white">Market price details</h2>
+                <span className="ml-auto text-[11px] text-[#5f6c86]">{entryNote}</span>
               </div>
 
               <table className="w-full border-collapse text-sm">
@@ -1505,6 +1530,11 @@ export default function StatsExplorerPage() {
                                 <div className="mt-1 text-[#8a97b1]">
                                   {m.local_time} · {m.tick_count}T
                                 </div>
+                                {m.entry_price_cents != null && (
+                                  <div className="text-[#c5d0e6]">
+                                    Entry: {fmtPrice(m.entry_price_cents)} ({m.entry_label})
+                                  </div>
+                                )}
                                 {m.lead_margin_pct != null && (
                                   <div className="text-[#22d38a]">
                                     Margin: {m.lead_margin_pct.toFixed(1)}%
