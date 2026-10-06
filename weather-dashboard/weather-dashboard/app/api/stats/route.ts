@@ -20,14 +20,15 @@ import {
  *   dateFrom    YYYY-MM-DD  (inclusive)
  *   dateTo      YYYY-MM-DD  (inclusive)
  *   method      "linear"|"reciprocal"|"combined"  (comma-sep for multiple)
- *   minCount    Integer; buckets with fewer rows are omitted (default 0)
+ *   minCount    Integer; buckets with fewer unique bets are omitted (default 0)
  *   resolvedOnly "1" — exclude unresolved market rows entirely
+ *   dedupe      "0" — show raw rows (default: one bet per city+date+bracket)
  *
  * Response:
  *   {
  *     dimensions: string[],
  *     filters: object,
- *     buckets: [{ key, label, count, resolved, win_rate, avg_edge_cents }],
+ *     buckets: [{ key, label, count, raw_count, resolved, win_rate, avg_edge_cents }],
  *     total_rows: number,
  *     dimension_registry: [{ id, label, configSchema }],
  *     computed_at: string | null,
@@ -110,6 +111,7 @@ export async function GET(req: NextRequest) {
     methods: parseCSV(sp.get("method")),
     minCount: sp.has("minCount") ? Math.max(0, parseInt(sp.get("minCount")!, 10) || 0) : 0,
     resolvedOnly: sp.get("resolvedOnly") === "1",
+    dedupe: sp.get("dedupe") !== "0",
   };
 
   try {
@@ -130,6 +132,7 @@ export async function GET(req: NextRequest) {
         methods: filters.methods,
         minCount: filters.minCount,
         resolvedOnly: filters.resolvedOnly,
+        dedupe: filters.dedupe,
       },
       buckets,
       total_rows: totalRows,

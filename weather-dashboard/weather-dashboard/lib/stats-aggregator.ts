@@ -80,12 +80,15 @@ export interface StatsFilters {
   methods?: string[];
   minCount?: number;
   resolvedOnly?: boolean;
+  /** Collapse Combined/Linear/Reciprocal rows on the same city+date+bracket into one bet. Default true. */
+  dedupe?: boolean;
 }
 
 export interface BucketResult {
   key: string;
   label: string;
-  count: number;
+  count: number;      // unique bets
+  raw_count: number;  // rows before dedupe
   resolved: number;
   win_rate: number | null;
   avg_edge_cents: number | null;
@@ -107,6 +110,10 @@ export interface DrillRow {
   final_rank: number | null;
   resolved: boolean;
   winning_bracket: string | null;
+  /** Every method that picked this exact bet, best-priority first. */
+  methods: string[];
+  /** Raw rows collapsed into this one (1 = no duplicates). */
+  dup_count: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -726,6 +733,51 @@ function rowKey(row: FeatureRow): string {
 }
 
 // ---------------------------------------------------------------------------
+// Same-bet dedupe
+// ---------------------------------------------------------------------------
+//
+// A real position is city + local_date + bracket. Combined, Linear and Reciprocal
+// rows with that key are the SAME bet, so they count once. Different brackets stay
+// separate. Representative row: combined > linear > reciprocal (fixed, so stable).
+// Pass enabled=false to get raw rows back (one "bet" per row).
+
+const METHOD_PRIORITY: Record<string, number> = { combined: 0, linear: 1, reciprocal: 2 };
+const methodPriority = (m: string): number => METHOD_PRIORITY[m] ?? 99;
+
+export function betKey(
+  row: Pick<FeatureRow, "city" | "local_date" | "bracket">
+): string {
+  return `${row.city}|${row.local_date}|${String(row.bracket).trim()}`;
+}
+
+export function dedupeBets<T>(
+  items: T[],
+  getRow: (item: T) => Pick<FeatureRow, "city" | "local_date" | "bracket" | "method">,
+  enabled = true
+): Array<{ item: T; methods: string[]; dup_count: number }> {
+  if (!enabled) {
+    return items.map((item) => ({ item, methods: [getRow(item).method], dup_count: 1 }));
+  }
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const k = betKey(getRow(item));
+    const g = groups.get(k);
+    if (g) g.push(item);
+    else groups.set(k, [item]);
+  }
+  const out: Array<{ item: T; methods: string[]; dup_count: number }> = [];
+  for (const g of groups.values()) {
+    g.sort((a, b) => methodPriority(getRow(a).method) - methodPriority(getRow(b).method));
+    out.push({
+      item: g[0],
+      methods: [...new Set(g.map((x) => getRow(x).method))],
+      dup_count: g.length,
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Aggregator
 // ---------------------------------------------------------------------------
 
@@ -817,12 +869,11 @@ export async function aggregate(
   });
 
   const entry = resolveEntry(dimensions);
+  const dedupe = filters.dedupe !== false;
 
-  // Group rows into buckets
-  const bucketMap = new Map<
-    string,
-    { count: number; wins: number; resolved: number; edgeSum: number; edgeCount: number }
-  >();
+  // Group rows into buckets. Each row keeps its entry-aligned edge.
+  type Item = { row: FeatureRow; edge: number | null };
+  const bucketMap = new Map<string, Item[]>();
 
   for (const row of rows) {
     const parts: string[] = [];
@@ -844,27 +895,37 @@ export async function aggregate(
     if (entry.kind !== "none" && entryPrice == null) continue;
 
     const key = parts.join("|");
-    if (!bucketMap.has(key)) {
-      bucketMap.set(key, { count: 0, wins: 0, resolved: 0, edgeSum: 0, edgeCount: 0 });
+    let list = bucketMap.get(key);
+    if (!list) {
+      list = [];
+      bucketMap.set(key, list);
     }
-    const s = bucketMap.get(key)!;
-    s.count++;
-    if (row.resolved) {
-      s.resolved++;
-      if (row.won) s.wins++;
-    }
-    if (entryEdge !== null) {
-      s.edgeSum += entryEdge;
-      s.edgeCount++;
-    }
+    list.push({ row, edge: entryEdge });
   }
 
-  // Build result rows, applying minCount filter
+  // Dedupe INSIDE each bucket, then compute stats from the unique bets only.
   const minCount = filters.minCount ?? 0;
   const buckets: BucketResult[] = [];
 
-  for (const [key, stats] of bucketMap) {
-    if (stats.count < minCount) continue;
+  for (const [key, items] of bucketMap) {
+    const unique = dedupeBets(items, (it) => it.row, dedupe);
+    if (unique.length < minCount) continue; // minCount now means unique bets
+
+    let wins = 0;
+    let resolved = 0;
+    let edgeSum = 0;
+    let edgeCount = 0;
+    for (const { item } of unique) {
+      if (item.row.resolved) {
+        resolved++;
+        if (item.row.won) wins++;
+      }
+      if (item.edge !== null) {
+        edgeSum += item.edge;
+        edgeCount++;
+      }
+    }
+
     const parts = key.split("|");
     const labelParts = parts.map((p, i) =>
       dimDefs[i].def.bucketLabel(p, dimDefs[i].config)
@@ -872,10 +933,11 @@ export async function aggregate(
     buckets.push({
       key,
       label: labelParts.join(" × "),
-      count: stats.count,
-      resolved: stats.resolved,
-      win_rate: stats.resolved > 0 ? stats.wins / stats.resolved : null,
-      avg_edge_cents: stats.edgeCount > 0 ? stats.edgeSum / stats.edgeCount : null,
+      count: unique.length,
+      raw_count: items.length,
+      resolved,
+      win_rate: resolved > 0 ? wins / resolved : null,
+      avg_edge_cents: edgeCount > 0 ? edgeSum / edgeCount : null,
     });
   }
 
@@ -953,6 +1015,9 @@ export async function getRowsForBucket(
     }
   }
 
+  const dedupe = filters.dedupe !== false;
+  const unique = dedupeBets(matched, (r) => r, dedupe);
+
   // Resolve winning_bracket per (city, local_date, method) with a single
   // secondary query rather than one lookup per row.
   // NOTE: this deliberately queries stats_features directly (NOT through the
@@ -993,8 +1058,13 @@ export async function getRowsForBucket(
   }
 
   const entryText = entryLabel(entry);
-  const drillRows: DrillRow[] = matched.map((row) => {
+  const drillRows: DrillRow[] = unique.map(({ item: row, methods, dup_count }) => {
     const { price, edge } = entryFor(row, entry);
+    // The winning bracket is the same real outcome for every method, so try each one.
+    const winning_bracket =
+      methods
+        .map((m) => winnerMap.get(`${row.city}|${row.local_date}|${m}`))
+        .find((w) => w != null) ?? null;
     return {
       local_date: row.local_date,
       bracket: row.bracket,
@@ -1006,8 +1076,9 @@ export async function getRowsForBucket(
       edge_cents: edge,
       final_rank: row.final_rank,
       resolved: row.resolved,
-      winning_bracket:
-        winnerMap.get(`${row.city}|${row.local_date}|${row.method}`) ?? null,
+      winning_bracket,
+      methods,
+      dup_count,
     };
   });
 

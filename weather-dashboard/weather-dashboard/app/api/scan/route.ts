@@ -11,6 +11,7 @@
  *               e.g. "lm:4:moderate|rt:4:rising"  (pipe-separated parts)
  *   cities      Comma-separated city list (optional — defaults to all cities)
  *   method      "linear"|"reciprocal"|"combined"|"all"  (default "combined")
+ *   dedupe      "0" — show raw matches (default: one match per city+date+bracket)
  *
  * Which methods are scanned:
  *   1. The criteria has a Method part (e.g. "method:linear")  → that method only.
@@ -41,6 +42,7 @@ import {
   resolveEntry,
   entryFor,
   entryLabel,
+  dedupeBets,
   type DimensionSpec,
   type FeatureRow,
 } from "@/lib/stats-aggregator";
@@ -77,6 +79,8 @@ interface ScanMatch {
   local_date: string;
   local_time: string;
   method: ScanMethod;
+  /** Every method that matched this exact bet (after dedupe). */
+  methods: ScanMethod[];
   entry_price_cents: number | null;
   entry_label: string;
   tick_count: number;
@@ -286,6 +290,7 @@ export async function GET(req: NextRequest) {
         local_date: row.local_date,
         local_time: localTime,
         method: rowMethod,
+        methods: [rowMethod],
         entry_price_cents: entryPrice,
         entry_label: entryText,
         tick_count: tickCount,
@@ -296,12 +301,16 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Tidy order: city, then bracket, then method (linear → reciprocal → combined)
-  matches.sort(
-    (a, b) =>
-      a.city.localeCompare(b.city) ||
-      a.bracket.localeCompare(b.bracket) ||
-      ALL_METHODS.indexOf(a.method) - ALL_METHODS.indexOf(b.method)
+  // Same bet from several methods (same city + date + bracket) = ONE opportunity.
+  // Representative: combined > linear > reciprocal. ?dedupe=0 shows raw matches.
+  const dedupe = sp.get("dedupe") !== "0";
+  const uniqueMatches: ScanMatch[] = dedupeBets(matches, (m) => m, dedupe).map(
+    ({ item, methods }) => ({ ...item, methods: methods as ScanMethod[] })
+  );
+
+  // Tidy order: city, then bracket
+  uniqueMatches.sort(
+    (a, b) => a.city.localeCompare(b.city) || a.bracket.localeCompare(b.bracket)
   );
 
   // Build human-readable criteria label
@@ -316,7 +325,7 @@ export async function GET(req: NextRequest) {
     method: methodsToScan.length > 1 ? "all" : methodsToScan[0],
     methods_scanned: methodsToScan,
     cities_scanned: citiesToScan,
-    match_count: matches.length,
-    matches,
+    match_count: uniqueMatches.length,
+    matches: uniqueMatches,
   });
 }

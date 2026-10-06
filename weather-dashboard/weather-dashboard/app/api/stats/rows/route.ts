@@ -25,12 +25,14 @@ import {
  *   dateTo      YYYY-MM-DD (inclusive)
  *   method      "linear"|"reciprocal"|"combined" (comma-sep for multiple)
  *   resolvedOnly "1" — exclude unresolved market rows entirely
+ *   dedupe      "0" — show raw rows (default: one row per city+date+bracket)
  *
  * Response:
  *   {
  *     rows: [{
  *       local_date, bracket, method, first_tick_price_cents,
- *       won, edge_cents, final_rank, resolved, winning_bracket
+ *       won, edge_cents, final_rank, resolved, winning_bracket,
+ *       methods, dup_count
  *     }],
  *     bucket_label: string,
  *     bucket_key: string,
@@ -124,6 +126,7 @@ export async function GET(req: NextRequest) {
     dateTo: sp.get("dateTo") ?? undefined,
     methods: parseCSV(sp.get("method")),
     resolvedOnly: sp.get("resolvedOnly") === "1",
+    dedupe: sp.get("dedupe") !== "0",
   };
 
   try {

@@ -36,6 +36,7 @@ interface Bucket {
   key: string;
   label: string;
   count: number;
+  raw_count?: number;   // rows before dedupe
   resolved: number;
   win_rate: number | null;
   avg_edge_cents: number | null;
@@ -66,6 +67,8 @@ interface DrillRow {
   final_rank: number | null;
   resolved: boolean;
   winning_bracket: string | null;
+  methods?: string[];
+  dup_count?: number;
 }
 
 interface DrillResponse {
@@ -107,6 +110,7 @@ interface ScanMatch {
   city: string;
   bracket: string;
   method: string;
+  methods?: string[];
   local_date: string;
   local_time: string;
   entry_price_cents: number | null;
@@ -192,7 +196,8 @@ function buildApiUrl(
   dateTo: string,
   method: string,
   minCount: number,
-  resolvedOnly: boolean
+  resolvedOnly: boolean,
+  dedupe: boolean
 ): string {
   const params = new URLSearchParams();
   if (dims.length > 0) params.set("by", dimsToByParam(dims));
@@ -202,6 +207,7 @@ function buildApiUrl(
   if (method && method !== "all") params.set("method", method);
   if (minCount > 0) params.set("minCount", String(minCount));
   if (resolvedOnly) params.set("resolvedOnly", "1");
+  if (!dedupe) params.set("dedupe", "0");
   return `/api/stats?${params.toString()}`;
 }
 
@@ -214,7 +220,8 @@ function buildDrillUrl(
   dateFrom: string,
   dateTo: string,
   method: string,
-  resolvedOnly: boolean
+  resolvedOnly: boolean,
+  dedupe: boolean
 ): string {
   const params = new URLSearchParams();
   params.set("by", dimsToByParam(dims));
@@ -224,6 +231,7 @@ function buildDrillUrl(
   if (dateTo)   params.set("dateTo",   dateTo);
   if (method && method !== "all") params.set("method", method);
   if (resolvedOnly) params.set("resolvedOnly", "1");
+  if (!dedupe) params.set("dedupe", "0");
   return `/api/stats/rows?${params.toString()}`;
 }
 
@@ -420,11 +428,14 @@ function DrillSubTable({
     );
   }
 
+  const rawCount = rows.reduce((s, r) => s + (r.dup_count ?? 1), 0);
+
   return (
     <div className="rounded-lg border border-[#16233a] bg-[#070f1c] px-3 py-3">
       {bucketLabel && (
         <div className="mb-2 text-[11px] text-[#5f6c86]">
-          {rows.length.toLocaleString()} row{rows.length !== 1 ? "s" : ""} · {bucketLabel}
+          {rows.length.toLocaleString()} unique bet{rows.length !== 1 ? "s" : ""}
+          {rawCount > rows.length ? ` (${rawCount.toLocaleString()} raw rows)` : ""} · {bucketLabel}
           {rows[0]?.entry_label ? ` · edge uses the ${rows[0].entry_label}` : ""}
         </div>
       )}
@@ -451,7 +462,9 @@ function DrillSubTable({
               >
                 <td className="px-2 py-1.5 tabular-nums text-[#c5d0e6]">{r.local_date}</td>
                 <td className="px-2 py-1.5 font-mono text-[#c5d0e6]">{r.bracket}</td>
-                <td className="px-2 py-1.5 capitalize text-[#8a97b1]">{r.method}</td>
+                <td className="px-2 py-1.5 capitalize text-[#8a97b1]">
+                  {(r.methods ?? [r.method]).join(" · ")}
+                </td>
                 <td className="px-2 py-1.5 text-right tabular-nums text-[#c5d0e6]">
                   {fmtPrice(r.entry_price_cents)}
                 </td>
@@ -526,6 +539,7 @@ export default function StatsExplorerPage() {
   const [method, setMethod]           = useState("combined");
   const [minCount, setMinCount]       = useState(10);
   const [resolvedOnly, setResolvedOnly] = useState(true);
+  const [dedupe, setDedupe] = useState(true);
 
   // ---- Display state — default to avg_edge per user requirement ----
   const [metric, setMetric]     = useState<Metric>("edge");
@@ -551,9 +565,10 @@ export default function StatsExplorerPage() {
         dateTo,
         method,
         minCount,
-        resolvedOnly
+        resolvedOnly,
+        dedupe
       ),
-    [activeDims, selectedCities, dateFrom, dateTo, method, minCount, resolvedOnly]
+    [activeDims, selectedCities, dateFrom, dateTo, method, minCount, resolvedOnly, dedupe]
   );
 
   const { data, isLoading } = useSWR<StatsResponse>(apiUrl, fetcher, {
@@ -571,10 +586,11 @@ export default function StatsExplorerPage() {
             dateFrom,
             dateTo,
             method,
-            resolvedOnly
+            resolvedOnly,
+            dedupe
           )
         : null,
-    [expandedKey, activeDims, selectedCities, dateFrom, dateTo, method, resolvedOnly]
+    [expandedKey, activeDims, selectedCities, dateFrom, dateTo, method, resolvedOnly, dedupe]
   );
 
   const { data: drillData, isLoading: drillLoading } = useSWR<DrillResponse>(
@@ -734,6 +750,7 @@ export default function StatsExplorerPage() {
           params.set("criteriaKey", criteria.key);
           params.set("cities",      citiesToScan.join(","));
           params.set("method",      criteria.method);
+          if (!dedupe) params.set("dedupe", "0");
           const res  = await fetch(`/api/scan?${params.toString()}`);
           const json: ScanResponse = await res.json();
           return [criteria.key, json] as [string, ScanResponse];
@@ -746,7 +763,7 @@ export default function StatsExplorerPage() {
     } finally {
       setIsScanning(false);
     }
-  }, [pinnedCriteria, selectedCities]);
+  }, [pinnedCriteria, selectedCities, dedupe]);
 
   // ---- Derived display data ----
   const sortedBuckets = useMemo(
@@ -1008,6 +1025,20 @@ export default function StatsExplorerPage() {
                 className="h-4 w-4 rounded accent-[#22c98a]"
               />
               Resolved markets only
+            </label>
+
+            {/* Count each bet once */}
+            <label
+              className="flex cursor-pointer select-none items-center gap-2 text-xs text-[#c5d0e6]"
+              title="Combined/Linear/Reciprocal rows on the same city, date and bracket count as one bet"
+            >
+              <input
+                type="checkbox"
+                checked={dedupe}
+                onChange={(e) => setDedupe(e.target.checked)}
+                className="h-4 w-4 rounded accent-[#22c98a]"
+              />
+              Count each bet once
             </label>
           </div>
         </div>
@@ -1333,6 +1364,14 @@ export default function StatsExplorerPage() {
                           </td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-white">
                             {b.count.toLocaleString()}
+                            {b.raw_count != null && b.raw_count > b.count && (
+                              <span
+                                className="ml-1.5 text-[10px] text-[#5f6c86]"
+                                title={`${b.raw_count} raw rows collapsed into ${b.count} unique bets`}
+                              >
+                                ({b.raw_count} raw)
+                              </span>
+                            )}
                           </td>
                           <td className="px-3 py-2.5 text-right tabular-nums text-[#c5d0e6]">
                             {b.resolved.toLocaleString()}
@@ -1521,12 +1560,14 @@ export default function StatsExplorerPage() {
                                 : null;
                             return (
                               <div
-                                key={`${m.city}|${m.bracket}|${m.method}`}
+                                key={`${m.city}|${m.local_date}|${m.bracket}`}
                                 className="min-w-36 rounded-lg border border-[#22c98a]/30 bg-[#22c98a]/10 px-3 py-2 text-xs"
                               >
                                 <div className="font-semibold capitalize text-white">{m.city}</div>
                                 <div className="font-mono text-[#38a3f5]">{m.bracket}</div>
-                                <div className="text-[10px] uppercase tracking-wide text-[#8a97b1]">{m.method}</div>
+                                <div className="text-[10px] uppercase tracking-wide text-[#8a97b1]">
+                                  {(m.methods ?? [m.method]).join(" · ")}
+                                </div>
                                 <div className="mt-1 text-[#8a97b1]">
                                   {m.local_time} · {m.tick_count}T
                                 </div>
