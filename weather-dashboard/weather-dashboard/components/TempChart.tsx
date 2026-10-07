@@ -272,7 +272,7 @@ export default function TempChart({
     <div>
       <div className="h-[19rem] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+          <LineChart data={data} margin={{ top: 10, right: compareActive ? 88 : 12, left: 0, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
             <XAxis
               dataKey="paced_at"
@@ -366,9 +366,10 @@ export default function TempChart({
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     content: (p: any) => (
                       <text
-                        x={p.viewBox.x + p.viewBox.width - 4}
-                        y={p.viewBox.y - 4 - i * 11}
-                        textAnchor="end"
+                        x={p.viewBox.x + p.viewBox.width + 6}
+                        y={p.viewBox.y + i * 12}
+                        dy="0.35em"
+                        textAnchor="start"
                         fill={cd.color}
                         fontSize={10}
                       >
