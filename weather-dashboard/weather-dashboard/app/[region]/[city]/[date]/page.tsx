@@ -275,6 +275,7 @@ export default function DayPage({
                   ticks={data.ticks}
                   reciprocalTicks={data.reciprocalTicks ?? []}
                   unit={data.unit}
+                  city={cityDecoded}
                   winningLow={data.winningLow}
                   winningHigh={data.winningHigh}
                   winningBracket={data.winningBracket}
