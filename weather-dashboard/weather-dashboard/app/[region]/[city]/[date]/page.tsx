@@ -410,6 +410,7 @@ export default function DayPage({
                 reciprocalTicks={data.reciprocalTicks ?? []}
                 unit={data.unit}
                 windowStats={windowStats ?? undefined}
+                compareDays={compareDays}
               />
             )}
           </Card>
