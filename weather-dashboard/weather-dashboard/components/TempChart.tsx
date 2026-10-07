@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import {
   LineChart,
   Line,
@@ -23,6 +23,40 @@ function formatClock(ms: number) {
     timeZone: "UTC",
   });
 }
+
+function formatBracket(bracket: string, unit: "F" | "C") {
+  return /^\d+-\d+$/.test(bracket) ? `${bracket}°${unit}` : bracket;
+}
+
+/** "2026-10-06" -> "10/06" */
+function shortDate(date: string) {
+  return date.slice(5).replace("-", "/");
+}
+
+// ── Compare days ────────────────────────────────────────────────────────────
+
+export const MAX_COMPARE = 3;
+export const COMPARE_COLORS: readonly string[] = [C.amber, "#a78bfa", "#a3e635"];
+
+export interface CompareDay {
+  date: string; // "YYYY-MM-DD"
+  color: string;
+  ticks: EnrichedTick[];
+  reciprocalTicks: EnrichedTick[];
+  winningLow: number | null;
+  winningHigh: number | null;
+  winningBracket: string | null;
+}
+
+type CompareMethod = "both" | "linear" | "reciprocal";
+
+interface Row {
+  paced_at: number;
+  [key: string]: number | null;
+}
+
+const cmpKey = (date: string, method: "linear" | "reciprocal") =>
+  `cmp${date.replace(/-/g, "")}_${method}`;
 
 // ── Full-day schedules ──────────────────────────────────────────────────────
 // All times are minutes since local midnight. paced_at stores the wall clock
@@ -138,6 +172,8 @@ export default function TempChart({
   winningHigh,
   winningBracket,
   city,
+  compareDays = [],
+  onRemoveCompare,
 }: {
   ticks: EnrichedTick[];
   reciprocalTicks: EnrichedTick[];
@@ -147,8 +183,13 @@ export default function TempChart({
   winningBracket: string | null;
   /** City name from the route. Falls back to ticks[0].city when omitted. */
   city?: string;
+  /** Past days to draw on top of the main day. */
+  compareDays?: CompareDay[];
+  /** Called with the date when the user removes a compare chip. */
+  onRemoveCompare?: (date: string) => void;
 }) {
   const [fullDay, setFullDay] = useState(false);
+  const [compareMethod, setCompareMethod] = useState<CompareMethod>("both");
 
   // Linear data points keyed by paced_at
   const linearPoints = ticks
@@ -163,7 +204,7 @@ export default function TempChart({
   );
 
   // Every linear point gets its matching reciprocal value (null = gap)
-  const data = linearPoints.map((d) => ({
+  const data: Row[] = linearPoints.map((d) => ({
     ...d,
     reciprocal: reciprocalMap.get(d.paced_at) ?? null,
   }));
@@ -172,31 +213,60 @@ export default function TempChart({
   const linearSet = new Set(linearPoints.map((d) => d.paced_at));
   for (const [paced_at, val] of reciprocalMap) {
     if (!linearSet.has(paced_at)) {
-      data.push({ paced_at, linear: null as unknown as number, reciprocal: val });
+      data.push({ paced_at, linear: null, reciprocal: val });
     }
   }
   data.sort((a, b) => a.paced_at - b.paced_at);
 
-  // One X-axis tick per distinct pacing time
+  // Distinct pacing times of the MAIN day only
   const realXs = [...new Set(data.map((d) => d.paced_at))].sort((a, b) => a - b);
 
-  // Full-day mode only changes the x-axis ticks and domain. `data` holds real
-  // ticks only, so the lines, y-axis range and tooltip stay the same.
+  // Add the compared days. Each point moves to the date of the main day,
+  // so all days share one time-of-day x-axis.
+  const compareActive = compareDays.length > 0;
+  if (compareActive) {
+    const mainBase = Math.floor((realXs[0] ?? 0) / DAY_MS) * DAY_MS;
+    const rowByX = new Map<number, Row>(data.map((r) => [r.paced_at, r]));
+
+    for (const cd of compareDays) {
+      const shift = mainBase - Date.parse(`${cd.date}T00:00:00Z`);
+      const put = (src: EnrichedTick[], method: "linear" | "reciprocal") => {
+        for (const t of src) {
+          if (t.paced_at === null || t.weighted_avg === null) continue;
+          const x = t.paced_at + shift;
+          let row = rowByX.get(x);
+          if (!row) {
+            row = { paced_at: x };
+            rowByX.set(x, row);
+            data.push(row);
+          }
+          row[cmpKey(cd.date, method)] = t.weighted_avg;
+        }
+      };
+      put(cd.ticks, "linear");
+      put(cd.reciprocalTicks, "reciprocal");
+    }
+    data.sort((a, b) => a.paced_at - b.paced_at);
+  }
+
+  // Distinct x values of all days (equals realXs when no day is compared)
+  const allXs = [...new Set(data.map((d) => d.paced_at))].sort((a, b) => a - b);
+
+  // Full-day mode only changes the x-axis ticks and domain. Compare turns it on.
   const schedule = getSchedule(city ?? ticks[0]?.city, unit);
-  const showFullDay = fullDay && schedule !== null;
-  const xTicks = showFullDay && schedule ? buildFullDayTicks(realXs, schedule) : realXs;
+  const showFullDay = (fullDay || compareActive) && schedule !== null;
+  const xTicks = showFullDay && schedule ? buildFullDayTicks(realXs, schedule) : allXs;
   const labelStep = showFullDay ? Math.max(1, Math.ceil(xTicks.length / MAX_LABELS)) : 1;
   const xDomain: ["dataMin", "dataMax"] | [number, number] =
     showFullDay && xTicks.length > 0
-      ? [xTicks[0], xTicks[xTicks.length - 1]]
+      ? [
+          Math.min(xTicks[0], allXs[0]),
+          Math.max(xTicks[xTicks.length - 1], allXs[allXs.length - 1]),
+        ]
       : ["dataMin", "dataMax"];
 
   const hasBand = winningLow !== null && winningHigh !== null;
-  const bracketText = winningBracket
-    ? /^\d+-\d+$/.test(winningBracket)
-      ? `${winningBracket}°${unit}`
-      : winningBracket
-    : "";
+  const bracketText = winningBracket ? formatBracket(winningBracket, unit) : "";
 
   return (
     <div>
@@ -268,6 +338,49 @@ export default function TempChart({
                 strokeDasharray="4 4"
               />
             )}
+
+            {/* Winning bracket of each compared day: light band + dashed line + label */}
+            {compareDays.flatMap((cd, i): ReactElement[] => {
+              if (cd.winningLow === null || cd.winningHigh === null) return [];
+              const text = cd.winningBracket
+                ? `${shortDate(cd.date)}: ${formatBracket(cd.winningBracket, unit)}`
+                : shortDate(cd.date);
+              return [
+                <ReferenceArea
+                  key={`cmp-band-${cd.date}`}
+                  y1={cd.winningLow}
+                  y2={cd.winningHigh}
+                  fill={cd.color}
+                  fillOpacity={0.07}
+                  stroke="none"
+                  ifOverflow="extendDomain"
+                />,
+                <ReferenceLine
+                  key={`cmp-line-${cd.date}`}
+                  y={(cd.winningLow + cd.winningHigh) / 2}
+                  stroke={cd.color}
+                  strokeOpacity={0.7}
+                  strokeDasharray="4 4"
+                  ifOverflow="extendDomain"
+                  label={{
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    content: (p: any) => (
+                      <text
+                        x={p.viewBox.x + p.viewBox.width - 4}
+                        y={p.viewBox.y - 4 - i * 11}
+                        textAnchor="end"
+                        fill={cd.color}
+                        fontSize={10}
+                      >
+                        {text}
+                      </text>
+                    ),
+                  }}
+                />,
+              ];
+            })}
+
+            {/* Main day */}
             <Line
               type="monotone"
               dataKey="linear"
@@ -277,7 +390,7 @@ export default function TempChart({
               dot={{ r: 2.5, fill: C.red, strokeWidth: 0 }}
               activeDot={{ r: 4 }}
               isAnimationActive={false}
-              connectNulls={false}
+              connectNulls={compareActive}
             />
             <Line
               type="monotone"
@@ -288,8 +401,47 @@ export default function TempChart({
               dot={{ r: 2.5, fill: C.cyan, strokeWidth: 0 }}
               activeDot={{ r: 4 }}
               isAnimationActive={false}
-              connectNulls={false}
+              connectNulls={compareActive}
             />
+
+            {/* Compared days: solid = linear, dashed = reciprocal */}
+            {compareDays.flatMap((cd): ReactElement[] => {
+              const lines: ReactElement[] = [];
+              if (compareMethod !== "reciprocal") {
+                lines.push(
+                  <Line
+                    key={cmpKey(cd.date, "linear")}
+                    type="monotone"
+                    dataKey={cmpKey(cd.date, "linear")}
+                    name={`${shortDate(cd.date)} Linear`}
+                    stroke={cd.color}
+                    strokeWidth={1.5}
+                    dot={{ r: 2, fill: cd.color, strokeWidth: 0 }}
+                    activeDot={{ r: 3.5 }}
+                    isAnimationActive={false}
+                    connectNulls
+                  />
+                );
+              }
+              if (compareMethod !== "linear") {
+                lines.push(
+                  <Line
+                    key={cmpKey(cd.date, "reciprocal")}
+                    type="monotone"
+                    dataKey={cmpKey(cd.date, "reciprocal")}
+                    name={`${shortDate(cd.date)} Reciprocal`}
+                    stroke={cd.color}
+                    strokeWidth={1.5}
+                    strokeDasharray="5 3"
+                    dot={{ r: 2, fill: cd.color, strokeWidth: 0 }}
+                    activeDot={{ r: 3.5 }}
+                    isAnimationActive={false}
+                    connectNulls
+                  />
+                );
+              }
+              return lines;
+            })}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -309,24 +461,81 @@ export default function TempChart({
           <button
             type="button"
             role="switch"
-            aria-checked={fullDay}
+            aria-checked={fullDay || compareActive}
+            disabled={compareActive}
             onClick={() => setFullDay((v) => !v)}
-            title="Show the whole day on the x-axis. Empty slots mark ticks that have not come in yet."
-            className="ml-auto flex cursor-pointer items-center gap-2 rounded-full border border-[#1f2838] px-3 py-1 text-[#c9d0dc] transition-colors hover:border-[#2c374b]"
+            title={
+              compareActive
+                ? "Full day is always on while days are compared."
+                : "Show the whole day on the x-axis. Empty slots mark ticks that have not come in yet."
+            }
+            className="ml-auto flex cursor-pointer items-center gap-2 rounded-full border border-[#1f2838] px-3 py-1 text-[#c9d0dc] transition-colors hover:border-[#2c374b] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <span
               className="relative h-3.5 w-6 rounded-full transition-colors"
-              style={{ background: fullDay ? C.green : C.axis }}
+              style={{ background: fullDay || compareActive ? C.green : C.axis }}
             >
               <span
                 className="absolute top-0.5 h-2.5 w-2.5 rounded-full bg-white transition-all"
-                style={{ left: fullDay ? 12 : 2 }}
+                style={{ left: fullDay || compareActive ? 12 : 2 }}
               />
             </span>
             Full day
           </button>
         )}
       </div>
+
+      {/* Compare chips, key, and line filter */}
+      {compareActive && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 pl-2 pr-2 text-xs">
+          {compareDays.map((cd) => (
+            <span
+              key={cd.date}
+              className="flex items-center gap-2 rounded-full border border-[#1f2838] py-0.5 pl-2.5 pr-1.5"
+              style={{ color: cd.color }}
+            >
+              <span className="h-2 w-2 rounded-full" style={{ background: cd.color }} />
+              {shortDate(cd.date)}
+              {cd.winningBracket && (
+                <span className="text-[#8b92a0]">{formatBracket(cd.winningBracket, unit)}</span>
+              )}
+              {onRemoveCompare && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${cd.date}`}
+                  onClick={() => onRemoveCompare(cd.date)}
+                  className="cursor-pointer px-1 text-[#8b92a0] hover:text-white"
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+
+          <span className="text-[#8b92a0]">solid = linear, dashed = reciprocal</span>
+
+          <div
+            role="group"
+            aria-label="Compared lines"
+            className="ml-auto flex overflow-hidden rounded-full border border-[#1f2838]"
+          >
+            {(["both", "linear", "reciprocal"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={compareMethod === m}
+                onClick={() => setCompareMethod(m)}
+                className={[
+                  "cursor-pointer px-3 py-1 capitalize transition-colors",
+                  compareMethod === m ? "bg-[#111a2a] text-white" : "text-[#8b92a0] hover:text-white",
+                ].join(" ")}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

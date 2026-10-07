@@ -4,7 +4,7 @@ import { useMemo, useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import useSWR from "swr";
 import Card from "@/components/Card";
-import TempChart from "@/components/TempChart";
+import TempChart, { COMPARE_COLORS, MAX_COMPARE, type CompareDay } from "@/components/TempChart";
 import StatsTable from "@/components/StatsTable";
 import PriceChart, { LatestUpdates, type BracketHistory } from "@/components/PriceChart";
 import LocalTimesPanel from "@/components/LocalTimesPanel";
@@ -42,6 +42,21 @@ interface CityStats {
   avgTicksPerDay: number | null;
   totalDays: number;
   dates: string[];
+}
+
+/** Loads one past day for the compare overlay. Returns undefined while it loads. */
+function useCompareDay(city: string, date: string | undefined) {
+  const isToday = date === new Date().toISOString().slice(0, 10);
+  const { data } = useSWR<DayResponse>(
+    date ? `/api/day/${encodeURIComponent(city)}/${date}` : null,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      revalidateIfStale: false,
+      refreshInterval: isToday ? 5 * 60_000 : 0,
+    }
+  );
+  return data;
 }
 
 export default function DayPage({
@@ -104,6 +119,59 @@ export default function DayPage({
       activeItemRef.current.scrollIntoView({ block: "nearest" });
     }
   }, [pickerOpen]);
+
+  // ── Compare days ───────────────────────────────────────────────────────────
+  // Each entry keeps its color, so the color does not change when another day is removed.
+  const [compare, setCompare] = useState<{ date: string; color: string }[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const compareRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!compareOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (compareRef.current && !compareRef.current.contains(e.target as Node)) {
+        setCompareOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [compareOpen]);
+
+  // One hook call for each possible slot. The number must equal MAX_COMPARE (3).
+  const cmp0 = useCompareDay(cityDecoded, compare[0]?.date);
+  const cmp1 = useCompareDay(cityDecoded, compare[1]?.date);
+  const cmp2 = useCompareDay(cityDecoded, compare[2]?.date);
+
+  const otherDates = (cityStats?.dates ?? []).filter((d) => d !== params.date);
+
+  function toggleCompare(date: string) {
+    setCompare((prev) => {
+      if (prev.some((p) => p.date === date)) return prev.filter((p) => p.date !== date);
+      if (prev.length >= MAX_COMPARE) return prev;
+      const used = new Set(prev.map((p) => p.color));
+      const color = COMPARE_COLORS.find((c) => !used.has(c)) ?? COMPARE_COLORS[0];
+      return [...prev, { date, color }];
+    });
+  }
+
+  const compareDays = useMemo<CompareDay[]>(() => {
+    const loaded = [cmp0, cmp1, cmp2];
+    const out: CompareDay[] = [];
+    compare.forEach((c, i) => {
+      const d = loaded[i];
+      if (!d) return; // still loading
+      out.push({
+        date: c.date,
+        color: c.color,
+        ticks: d.ticks ?? [],
+        reciprocalTicks: d.reciprocalTicks ?? [],
+        winningLow: d.winningLow,
+        winningHigh: d.winningHigh,
+        winningBracket: d.winningBracket,
+      });
+    });
+    return out;
+  }, [compare, cmp0, cmp1, cmp2]);
 
   // ── Window stats ───────────────────────────────────────────────────────────
   const windowStats = useMemo(() => {
@@ -263,6 +331,55 @@ export default function DayPage({
                   </div>
                 )}
               </div>
+
+              {/* Compare picker */}
+              <div className="relative" ref={compareRef}>
+                <button
+                  onClick={() => setCompareOpen((v) => !v)}
+                  className="flex cursor-pointer items-center gap-2 rounded-full border border-[#1f2838] px-3 py-1 text-xs text-[#c9d0dc] transition-colors hover:border-[#2c374b]"
+                  aria-haspopup="listbox"
+                  aria-expanded={compareOpen}
+                >
+                  Compare{compare.length > 0 ? ` (${compare.length})` : ""}
+                </button>
+
+                {compareOpen && (
+                  <div
+                    role="listbox"
+                    aria-multiselectable="true"
+                    className="absolute left-0 top-full z-50 mt-2 max-h-64 min-w-[11rem] overflow-y-auto rounded-xl border border-[#151c2b] bg-[#0a0f1a] shadow-2xl"
+                  >
+                    {otherDates.length === 0 && (
+                      <div className="px-3 py-2 text-sm text-[#8b92a0]">No other dates</div>
+                    )}
+                    {otherDates.map((d) => {
+                      const picked = compare.find((c) => c.date === d);
+                      const full = !picked && compare.length >= MAX_COMPARE;
+                      return (
+                        <button
+                          key={d}
+                          type="button"
+                          role="option"
+                          aria-selected={!!picked}
+                          disabled={full}
+                          onClick={() => toggleCompare(d)}
+                          className={[
+                            "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors",
+                            picked ? "bg-[#111a2a] text-white" : "text-[#c9d0dc] hover:bg-[#111a2a]",
+                            full ? "cursor-not-allowed opacity-40" : "cursor-pointer",
+                          ].join(" ")}
+                        >
+                          <span
+                            className="h-2 w-2 rounded-full border border-[#2c374b]"
+                            style={picked ? { background: picked.color, borderColor: picked.color } : undefined}
+                          />
+                          {d}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="mt-4">
@@ -279,6 +396,8 @@ export default function DayPage({
                   winningLow={data.winningLow}
                   winningHigh={data.winningHigh}
                   winningBracket={data.winningBracket}
+                  compareDays={compareDays}
+                  onRemoveCompare={toggleCompare}
                 />
               )}
             </div>
