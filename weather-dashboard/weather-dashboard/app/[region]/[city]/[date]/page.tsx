@@ -429,20 +429,32 @@ export default function DayPage({
             </h2>
             {data && hasPriceTicks && (
               <>
-                <PriceChart
-                  ticks={data.ticks}
-                  reciprocalTicks={reciprocalTicks}
-                  bracketHistories={brackets}
-                  tzOffsetMs={tzOffsetMs}
-                />
-                {/* When brackets is empty, PriceChart already renders the Yes-price chart. */}
-                {brackets.length > 0 && (
-                  <div className="mt-5 border-t border-[#151c2b] pt-4">
-                    <div className="mb-2 text-sm text-[#8b92a0]">
-                      Yes price of the forecast bracket (linear vs reciprocal)
+                {/* When brackets is empty, PriceChart renders the Yes-price chart. */}
+                {brackets.length > 0 ? (
+                  <>
+                    <div>
+                      <div className="mb-2 text-sm text-[#8b92a0]">
+                        Yes price of the forecast bracket (linear vs reciprocal)
+                      </div>
+                      <YesPriceChart ticks={data.ticks} reciprocalTicks={reciprocalTicks} />
                     </div>
-                    <YesPriceChart ticks={data.ticks} reciprocalTicks={reciprocalTicks} />
-                  </div>
+                    <div className="mt-5 border-t border-[#151c2b] pt-4">
+                      <div className="mb-2 text-sm text-[#8b92a0]">Polymarket price by bracket</div>
+                      <PriceChart
+                        ticks={data.ticks}
+                        reciprocalTicks={reciprocalTicks}
+                        bracketHistories={brackets}
+                        tzOffsetMs={tzOffsetMs}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <PriceChart
+                    ticks={data.ticks}
+                    reciprocalTicks={reciprocalTicks}
+                    bracketHistories={brackets}
+                    tzOffsetMs={tzOffsetMs}
+                  />
                 )}
               </>
             )}

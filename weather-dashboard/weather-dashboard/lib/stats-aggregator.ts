@@ -96,6 +96,7 @@ export interface BucketResult {
 
 /** One raw `stats_features` doc, flattened for the drill-down sub-table. */
 export interface DrillRow {
+  city: string;
   local_date: string;
   bracket: string;
   method: string;
@@ -1066,6 +1067,8 @@ export async function getRowsForBucket(
         .map((m) => winnerMap.get(`${row.city}|${row.local_date}|${m}`))
         .find((w) => w != null) ?? null;
     return {
+      // `row` is the representative kept by dedupeBets, so this is that bet's city.
+      city: row.city,
       local_date: row.local_date,
       bracket: row.bracket,
       method: row.method,

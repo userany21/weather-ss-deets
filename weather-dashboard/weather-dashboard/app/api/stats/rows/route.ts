@@ -30,7 +30,8 @@ import {
  * Response:
  *   {
  *     rows: [{
- *       local_date, bracket, method, first_tick_price_cents,
+ *       city, local_date, bracket, method, first_tick_price_cents,
+ *       entry_price_cents, entry_label,
  *       won, edge_cents, final_rank, resolved, winning_bracket,
  *       methods, dup_count
  *     }],

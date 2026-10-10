@@ -15,6 +15,7 @@ import {
 } from "recharts";
 import { CITIES } from "@/lib/cities-config";
 import LocalTimesPanel from "@/components/LocalTimesPanel";
+import DayModal from "@/components/DayModal";
 
 // ---------------------------------------------------------------------------
 // API response types (mirrors what /api/stats returns)
@@ -56,6 +57,7 @@ interface StatsResponse {
 // ---------------------------------------------------------------------------
 
 interface DrillRow {
+  city: string;
   local_date: string;
   bracket: string;
   method: string;
@@ -409,6 +411,40 @@ function fmtPrice(n: number | null): string {
   return `${n.toFixed(0)}¢`;
 }
 
+/** Bet summary shown under the day-modal title. Uses the table's formatters. */
+function DrillBetHeader({ row }: { row: DrillRow }) {
+  const edgePositive = row.edge_cents != null && row.edge_cents > 0;
+  const edgeNegative = row.edge_cents != null && row.edge_cents < 0;
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+      <span className="font-mono text-[#c5d0e6]">{row.bracket}</span>
+      <span className="capitalize text-[#8a97b1]">
+        {(row.methods ?? [row.method]).join(" · ")}
+      </span>
+      <span className="tabular-nums text-[#c5d0e6]">
+        {fmtPrice(row.entry_price_cents)}
+        <span className="text-[#5f6c86]"> ({row.entry_label})</span>
+      </span>
+      <span className="font-semibold">
+        {!row.resolved || row.won == null ? (
+          <span className="text-[#5f6c86]">—</span>
+        ) : row.won ? (
+          <span style={{ color: C.good }}>W</span>
+        ) : (
+          <span style={{ color: C.bad }}>L</span>
+        )}
+      </span>
+      <span
+        className="font-medium tabular-nums"
+        style={{ color: edgePositive ? C.good : edgeNegative ? C.bad : C.axis }}
+      >
+        {fmtEdge(row.edge_cents)}
+      </span>
+      <span className="text-[#8a97b1]">{row.winning_bracket ?? "—"}</span>
+    </div>
+  );
+}
+
 /**
  * Inline sub-table shown when a Market price details row is expanded.
  * Renders every raw stats_features doc that was averaged into that bucket.
@@ -420,6 +456,8 @@ function DrillSubTable({
   rows: DrillRow[];
   bucketLabel?: string;
 }) {
+  const [selected, setSelected] = useState<DrillRow | null>(null);
+
   if (rows.length === 0) {
     return (
       <div className="py-3 text-xs text-[#8a97b1]">
@@ -458,7 +496,16 @@ function DrillSubTable({
             return (
               <tr
                 key={`${r.local_date}-${r.bracket}-${r.method}-${i}`}
-                className="border-t border-[#121d31]"
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelected(r)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelected(r);
+                  }
+                }}
+                className="cursor-pointer border-t border-[#121d31] hover:bg-white/[0.03]"
               >
                 <td className="px-2 py-1.5 tabular-nums text-[#c5d0e6]">{r.local_date}</td>
                 <td className="px-2 py-1.5 font-mono text-[#c5d0e6]">{r.bracket}</td>
@@ -493,6 +540,14 @@ function DrillSubTable({
           })}
         </tbody>
       </table>
+      {selected && (
+        <DayModal
+          city={selected.city}
+          date={selected.local_date}
+          onClose={() => setSelected(null)}
+          header={<DrillBetHeader row={selected} />}
+        />
+      )}
     </div>
   );
 }
