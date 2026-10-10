@@ -4,10 +4,13 @@ import { useMemo, useState } from "react";
 import {
   AreaChart,
   Area,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ReferenceLine,
   ResponsiveContainer,
 } from "recharts";
@@ -181,71 +184,182 @@ const axisProps = {
 } as const;
 
 // ---------------------------------------------------------------------------
-// Fallback chart (no price history yet) — single blue area
+// Fallback chart (no price history yet) — linear and reciprocal lines
 // ---------------------------------------------------------------------------
 
-export function YesPriceChart({ ticks }: { ticks: EnrichedTick[] }) {
-  const { data, switchTimes } = useMemo(() => {
-    const data = ticks
-      .filter((t) => t.paced_at !== null && t.yes_price !== null)
-      .map((t) => ({
-        t_ms: t.paced_at as number,
-        price_cents: (t.yes_price as number) * 100,
-        point_bracket: t.point_bracket,
-      }));
+// Stable empty array. This keeps the useMemo dependencies the same between renders.
+const EMPTY_TICKS: EnrichedTick[] = [];
 
-    // Dashed vertical lines at bracket-switch moments
-    const switchTimes: number[] = [];
-    let prev: string | null = null;
-    for (const d of data) {
-      if (prev !== null && d.point_bracket !== prev) switchTimes.push(d.t_ms);
-      prev = d.point_bracket ?? prev;
+interface YesPoint {
+  t_ms: number;
+  cents: number;
+  bracket: string | null;
+}
+
+interface YesRow {
+  t_ms: number;
+  linear?: number;
+  reciprocal?: number;
+  linearBracket?: string | null;
+  reciprocalBracket?: string | null;
+}
+
+/** Keep ticks that have paced_at and yes_price. Convert yes_price (0–1) to cents. */
+function toYesPoints(ticks: EnrichedTick[]): YesPoint[] {
+  return ticks
+    .filter((t) => t.paced_at != null && t.yes_price != null)
+    .map((t) => ({
+      t_ms: t.paced_at as number,
+      cents: (t.yes_price as number) * 100,
+      bracket: t.point_bracket ?? null,
+    }))
+    .sort((a, b) => a.t_ms - b.t_ms);
+}
+
+/** Times at which point_bracket changes inside one series. */
+function toSwitchTimes(points: YesPoint[]): number[] {
+  const out: number[] = [];
+  let prev: string | null = null;
+  for (const p of points) {
+    if (p.bracket === null) continue;
+    if (prev !== null && p.bracket !== prev) out.push(p.t_ms);
+    prev = p.bracket;
+  }
+  return out;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function YesTooltip({ active, payload, showReciprocal }: any) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload as YesRow;
+
+  const lines = [
+    { name: "Linear", color: C.red, value: row.linear, bracket: row.linearBracket },
+    ...(showReciprocal
+      ? [{ name: "Reciprocal", color: C.cyan, value: row.reciprocal, bracket: row.reciprocalBracket }]
+      : []),
+  ];
+
+  return (
+    <div
+      style={{
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        padding: "8px 12px",
+        fontSize: 13,
+        minWidth: 170,
+      }}
+    >
+      <div style={{ color: C.sub, marginBottom: 6, fontSize: 12 }}>{formatClock(row.t_ms)}</div>
+      {lines.map((l) => (
+        <div
+          key={l.name}
+          style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 2 }}
+        >
+          <span style={{ color: l.color, fontWeight: 600 }}>{l.name}</span>
+          <span style={{ color: C.text, fontFamily: "monospace" }}>
+            {l.value !== undefined ? `${l.value.toFixed(1)}¢` : "—"}
+            {l.value !== undefined && l.bracket ? ` · ${l.bracket}` : ""}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function YesPriceChart({
+  ticks,
+  reciprocalTicks = EMPTY_TICKS,
+}: {
+  ticks: EnrichedTick[];
+  reciprocalTicks?: EnrichedTick[];
+}) {
+  const { data, linearSwitches, reciprocalSwitches, hasReciprocal } = useMemo(() => {
+    const lin = toYesPoints(ticks);
+    const rec = toYesPoints(reciprocalTicks);
+
+    // Join both series on paced_at. A side with no tick at that time stays undefined.
+    const rows = new Map<number, YesRow>();
+    for (const p of lin) {
+      const row = rows.get(p.t_ms) ?? { t_ms: p.t_ms };
+      row.linear = p.cents;
+      row.linearBracket = p.bracket;
+      rows.set(p.t_ms, row);
     }
-    return { data, switchTimes };
-  }, [ticks]);
+    for (const p of rec) {
+      const row = rows.get(p.t_ms) ?? { t_ms: p.t_ms };
+      row.reciprocal = p.cents;
+      row.reciprocalBracket = p.bracket;
+      rows.set(p.t_ms, row);
+    }
+
+    return {
+      data: [...rows.values()].sort((a, b) => a.t_ms - b.t_ms),
+      linearSwitches: toSwitchTimes(lin),
+      reciprocalSwitches: toSwitchTimes(rec),
+      hasReciprocal: rec.length > 0,
+    };
+  }, [ticks, reciprocalTicks]);
 
   return (
     <div className="h-[13rem] w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="pg-fallback" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={C.blue} stopOpacity={0.45} />
-              <stop offset="100%" stopColor={C.blue} stopOpacity={0.05} />
-            </linearGradient>
-          </defs>
+        <LineChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={C.grid} />
           <XAxis
             dataKey="t_ms"
             type="number"
             domain={["dataMin", "dataMax"]}
-            tickFormatter={formatClock}
+            tickFormatter={(v: number) => formatClock(v)}
             {...axisProps}
           />
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} width={32} {...axisProps} />
-          <Tooltip
-            labelFormatter={(v: number) => formatClock(v)}
-            contentStyle={{
-              background: C.panel,
-              border: `1px solid ${C.border}`,
-              borderRadius: 8,
-            }}
-          />
-          {switchTimes.map((t) => (
-            <ReferenceLine key={t} x={t} stroke="#666" strokeDasharray="4 4" strokeOpacity={0.5} />
+          <Legend verticalAlign="top" height={20} iconType="plainline" wrapperStyle={{ fontSize: 12 }} />
+          <Tooltip content={(props) => <YesTooltip {...props} showReciprocal={hasReciprocal} />} />
+          {linearSwitches.map((t) => (
+            <ReferenceLine
+              key={`l-${t}`}
+              x={t}
+              stroke={C.red}
+              strokeDasharray="4 4"
+              strokeOpacity={0.35}
+            />
           ))}
-          <Area
+          {reciprocalSwitches.map((t) => (
+            <ReferenceLine
+              key={`r-${t}`}
+              x={t}
+              stroke={C.cyan}
+              strokeDasharray="4 4"
+              strokeOpacity={0.35}
+            />
+          ))}
+          <Line
             type="monotone"
-            dataKey="price_cents"
-            name="Yes price"
-            stroke={C.blue}
+            dataKey="linear"
+            name="Linear"
+            stroke={C.red}
             strokeWidth={1.5}
-            fill="url(#pg-fallback)"
             dot={false}
             activeDot={{ r: 4 }}
             isAnimationActive={false}
+            connectNulls
           />
-        </AreaChart>
+          {hasReciprocal && (
+            <Line
+              type="monotone"
+              dataKey="reciprocal"
+              name="Reciprocal"
+              stroke={C.cyan}
+              strokeWidth={1.5}
+              dot={false}
+              activeDot={{ r: 4 }}
+              isAnimationActive={false}
+              connectNulls
+            />
+          )}
+        </LineChart>
       </ResponsiveContainer>
     </div>
   );
@@ -257,16 +371,21 @@ export function YesPriceChart({ ticks }: { ticks: EnrichedTick[] }) {
 
 export default function PriceChart({
   ticks,
+  reciprocalTicks = EMPTY_TICKS,
   bracketHistories,
   tzOffsetMs = 0,
 }: {
   ticks: EnrichedTick[];
+  /** Used only by the Yes-price fallback chart. Optional. */
+  reciprocalTicks?: EnrichedTick[];
   bracketHistories: BracketHistory[];
   /** UTC offset in ms for the city's timezone (e.g. PDT = -25200000). Used
    *  to align paced_at (local-time-as-UTC) with real-UTC price history. */
   tzOffsetMs?: number;
 }) {
-  if (bracketHistories.length === 0) return <YesPriceChart ticks={ticks} />;
+  if (bracketHistories.length === 0) {
+    return <YesPriceChart ticks={ticks} reciprocalTicks={reciprocalTicks} />;
+  }
   return <FullChart ticks={ticks} bracketHistories={bracketHistories} tzOffsetMs={tzOffsetMs} />;
 }
 

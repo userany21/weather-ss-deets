@@ -15,6 +15,7 @@ import { useWeatherStream } from "@/lib/useWeatherStream";
 import { C } from "@/lib/theme";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const NO_TICKS: EnrichedTick[] = [];
 
 function avg(nums: (number | null)[]) {
   const vals = nums.filter((n): n is number => n != null);
@@ -229,6 +230,9 @@ export default function DayPage({
   }, [data?.ticks, data?.reciprocalTicks]);
 
   const hasTicks = !!data && data.ticks.length > 0;
+  const reciprocalTicks = data?.reciprocalTicks ?? NO_TICKS;
+  // The price section shows when either collection has ticks.
+  const hasPriceTicks = !!data && (data.ticks.length > 0 || reciprocalTicks.length > 0);
   const brackets = priceHistoryData?.brackets ?? [];
   const tzOffsetMs = priceHistoryData?.tzOffsetMs ?? 0;
 
@@ -423,14 +427,21 @@ export default function DayPage({
               <BarChartIcon width={22} height={22} className="text-[#3b8bf5]" />
               Market price over the day
             </h2>
-            {data && hasTicks && (
+            {data && hasPriceTicks && (
               <>
-                <PriceChart ticks={data.ticks} bracketHistories={brackets} tzOffsetMs={tzOffsetMs} />
+                <PriceChart
+                  ticks={data.ticks}
+                  reciprocalTicks={reciprocalTicks}
+                  bracketHistories={brackets}
+                  tzOffsetMs={tzOffsetMs}
+                />
                 {/* When brackets is empty, PriceChart already renders the Yes-price chart. */}
                 {brackets.length > 0 && (
                   <div className="mt-5 border-t border-[#151c2b] pt-4">
-                    <div className="mb-2 text-sm text-[#8b92a0]">Yes price of the forecast bracket</div>
-                    <YesPriceChart ticks={data.ticks} />
+                    <div className="mb-2 text-sm text-[#8b92a0]">
+                      Yes price of the forecast bracket (linear vs reciprocal)
+                    </div>
+                    <YesPriceChart ticks={data.ticks} reciprocalTicks={reciprocalTicks} />
                   </div>
                 )}
               </>
