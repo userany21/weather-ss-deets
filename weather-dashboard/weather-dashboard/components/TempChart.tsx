@@ -464,7 +464,10 @@ export default function TempChart({
             role="switch"
             aria-checked={fullDay || compareActive}
             disabled={compareActive}
-            onClick={() => setFullDay((v) => !v)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setFullDay((v) => !v);
+            }}
             title={
               compareActive
                 ? "Full day is always on while days are compared."

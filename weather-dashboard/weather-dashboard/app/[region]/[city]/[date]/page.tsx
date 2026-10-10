@@ -6,7 +6,7 @@ import useSWR from "swr";
 import Card from "@/components/Card";
 import TempChart, { COMPARE_COLORS, MAX_COMPARE, type CompareDay } from "@/components/TempChart";
 import StatsTable from "@/components/StatsTable";
-import PriceChart, { LatestUpdates, type BracketHistory } from "@/components/PriceChart";
+import PriceChart, { LatestUpdates, YesPriceChart, type BracketHistory } from "@/components/PriceChart";
 import LocalTimesPanel from "@/components/LocalTimesPanel";
 import { BarChartIcon, CloudIcon, InfoIcon, PinIcon } from "@/components/icons";
 import type { EnrichedTick } from "@/lib/weather-transform";
@@ -424,7 +424,16 @@ export default function DayPage({
               Market price over the day
             </h2>
             {data && hasTicks && (
-              <PriceChart ticks={data.ticks} bracketHistories={brackets} tzOffsetMs={tzOffsetMs} />
+              <>
+                <PriceChart ticks={data.ticks} bracketHistories={brackets} tzOffsetMs={tzOffsetMs} />
+                {/* When brackets is empty, PriceChart already renders the Yes-price chart. */}
+                {brackets.length > 0 && (
+                  <div className="mt-5 border-t border-[#151c2b] pt-4">
+                    <div className="mb-2 text-sm text-[#8b92a0]">Yes price of the forecast bracket</div>
+                    <YesPriceChart ticks={data.ticks} />
+                  </div>
+                )}
+              </>
             )}
           </Card>
 

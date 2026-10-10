@@ -5,6 +5,7 @@ import TempChart from "@/components/TempChart";
 import PriceChart from "@/components/PriceChart";
 import type { EnrichedTick } from "@/lib/weather-transform";
 import { useWeatherStream } from "@/lib/useWeatherStream";
+import { useRouter } from "next/navigation";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -17,7 +18,9 @@ interface LiveCity {
   isLive: boolean;
 }
 
-function LiveCityPanel({ city, localDate, localTime }: LiveCity) {
+function LiveCityPanel({ city, region, localDate, localTime }: LiveCity) {
+  const router = useRouter();
+  const href = `/${region}/${encodeURIComponent(city)}/${localDate}`;
   const key = `/api/day/${encodeURIComponent(city)}/${localDate}`;
   const { data, mutate } = useSWR(key, fetcher, {
     // Backstop only — new ticks trigger an immediate refetch via the SSE
@@ -32,7 +35,16 @@ function LiveCityPanel({ city, localDate, localTime }: LiveCity) {
   });
 
   return (
-    <div className="card">
+    <div
+      className="card cursor-pointer"
+      role="link"
+      tabIndex={0}
+      onClick={() => router.push(href)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter") router.push(href);
+      }}
+    >
       <div className="flex items-baseline justify-between mb-2">
         <h2 className="capitalize font-medium">{city}</h2>
         <span className="text-subtext text-xs">local {localTime}</span>

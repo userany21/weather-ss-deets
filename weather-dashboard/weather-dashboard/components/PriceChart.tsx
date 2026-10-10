@@ -184,7 +184,7 @@ const axisProps = {
 // Fallback chart (no price history yet) — single blue area
 // ---------------------------------------------------------------------------
 
-function FallbackChart({ ticks }: { ticks: EnrichedTick[] }) {
+export function YesPriceChart({ ticks }: { ticks: EnrichedTick[] }) {
   const { data, switchTimes } = useMemo(() => {
     const data = ticks
       .filter((t) => t.paced_at !== null && t.yes_price !== null)
@@ -266,7 +266,7 @@ export default function PriceChart({
    *  to align paced_at (local-time-as-UTC) with real-UTC price history. */
   tzOffsetMs?: number;
 }) {
-  if (bracketHistories.length === 0) return <FallbackChart ticks={ticks} />;
+  if (bracketHistories.length === 0) return <YesPriceChart ticks={ticks} />;
   return <FullChart ticks={ticks} bracketHistories={bracketHistories} tzOffsetMs={tzOffsetMs} />;
 }
 
