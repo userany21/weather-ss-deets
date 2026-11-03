@@ -1,522 +1,466 @@
 /**
- * stats/build-feature-table.js
+ * stats/build-feature-table.js   (feature_version 2: point-in-time "as of T_N" features)
  *
- * Builds (or incrementally refreshes) the `stats_features` collection in MongoDB.
- * One document per (city, local_date, bracket, method) tuple.
+ * Builds the `stats_features` collection: one document per (city, local_date, bracket, method).
+ * All feature logic lives in ../shared/feature-reducer.js (the same code the live scan uses).
+ * This file is only I/O: fetch ticks, fold them through the reducer, write the documents.
  *
- * Methods produced:
- *   linear     — reads from `high-temp` collection only
- *   reciprocal — reads from `reciprocal` collection only
- *   combined   — merges tick counts from both; first-tick = earliest captured_at across both
+ * Methods produced:  linear (high-temp)  and  reciprocal.   NOT combined (see reducer notes:
+ * the two votes of one scrape arrive in a random order and ticks have no scrape id).
+ *
+ * SAFE BY DEFAULT: with no flag this is a DRY RUN. It reads, prints counts, and writes nothing.
  *
  * Usage:
- *   MONGO_URI="..." node build-feature-table.js              # last 7 days
- *   MONGO_URI="..." node build-feature-table.js --days=30
- *   MONGO_URI="..." node build-feature-table.js --force      # all history
- *   MONGO_URI="..." node build-feature-table.js --city=tokyo
- *   MONGO_URI="..." node build-feature-table.js --dry-run    # print counts only, no writes
+ *   MONGO_URI="..." node stats/build-feature-table.js                  # dry run, last 7 days (+1 day margin)
+ *   MONGO_URI="..." node stats/build-feature-table.js --days=30        # dry run, wider window
+ *   MONGO_URI="..." node stats/build-feature-table.js --force          # dry run, all history
+ *   MONGO_URI="..." node stats/build-feature-table.js --force --apply --backup-legacy=stats_features_legacy_YYYYMMDD
+ *   MONGO_URI="..." node stats/build-feature-table.js --days=7 --apply # incremental write
  *
- * Design notes from analyze-bracket-correlation.js:
- *   - bracket: null docs (pre-n8n era) are explicitly excluded.
- *   - Tie handling: all brackets tied for the max cumulative count at hour N are
- *     marked is_leader_through_hour[N]=true, matching the existing script's behavior.
- *   - rank_through_hour uses sequential position in the sorted array (1,2,3,...),
- *     NOT tied ranks. This matches what rankOf() actually does in the existing script
- *     (the comment there is wrong).
- *   - pacing_time is already local clock time — no timezone conversion applied.
- *   - yes_price_cents may be null on older docs; has_price=false for those rows,
- *     and edge_cents is left null.
- *   - winning_bracket is collected from both collections; whichever has it first wins.
- *   - Unresolved city-days get resolved=false, won=null, edge_cents=null.
+ * Flags:
+ *   --dry-run                  default. Print counts only.
+ *   --apply                    write to the output collection.
+ *   --force                    all history (otherwise --days=N, default 7, plus one safety day).
+ *   --city=NAME                restrict to one city.
+ *   --out=COLLECTION           output collection (default stats_features). Never a tick collection.
+ *   --backup-legacy=NAME       before the first overwrite, copy every non-v2 document of the output
+ *                              collection into the NEW collection NAME ($out). Aborts if NAME exists.
+ *   --allow-overwrite-legacy   overwrite legacy documents WITHOUT a backup (not recommended).
+ *
+ * Guards:
+ *   - Incremental runs (no --force) refuse unless v2 documents already exist and every one of
+ *     them has the current definition_hash.
+ *   - A --force --apply refuses to overwrite legacy (non-v2) documents unless a backup or the
+ *     explicit allow flag is given.
+ *   - Nothing here ever writes to `high-temp` or `reciprocal`, and nothing is ever deleted.
+ *
+ * Ordering: ticks are sorted in JavaScript by (captured_at epoch ms, collection rank, _id), never
+ * by a Mongo sort, because captured_at may be an ISO string or a Date.
+ * Day window: local_date is not UTC, so the incremental cutoff has one extra safety day.
  */
 
-require("dotenv").config();
-const { MongoClient } = require("mongodb");
+'use strict';
 
-const MONGO_URI = process.env.MONGO_URI;
-if (!MONGO_URI) {
-  console.error("Set MONGO_URI env var first.");
-  process.exit(1);
-}
+const R = require('../shared/feature-reducer.js');
 
-const rawArgs = process.argv.slice(2);
-const args = Object.fromEntries(
-  rawArgs
-    .filter((a) => a.startsWith("--"))
-    .map((a) => {
-      const [k, v] = a.replace(/^--/, "").split("=");
-      return [k, v ?? true];
-    })
-);
-
-const FORCE = !!args.force;
-const DAYS = FORCE ? null : parseInt(args.days ?? "7", 10);
-const CITY_FILTER = args.city ?? null;
-const DRY_RUN = !!args["dry-run"];
-
-const NUM_HOUR_BUCKETS = 10; // hour0..hour9  (8am-6pm local, one bucket per clock hour)
 const BATCH_SIZE = 500;
+const DEFAULT_OUT = 'stats_features';
+const TICK_COLLECTIONS = [
+  { collection: 'high-temp', method: 'linear' },
+  { collection: 'reciprocal', method: 'reciprocal' },
+];
+const PROTECTED_COLLECTIONS = new Set(['high-temp', 'reciprocal']);
+const KNOWN_FLAGS = new Set([
+  'dry-run', 'apply', 'force', 'days', 'city', 'out', 'backup-legacy', 'allow-overwrite-legacy',
+]);
 
 // ---------------------------------------------------------------------------
-// Utility — mirrors the logic already in analyze-bracket-correlation.js
+// Pure helpers (exported for tests)
 // ---------------------------------------------------------------------------
 
-function normBracket(b) {
-  if (b === null || b === undefined) return null;
-  return String(b).trim();
+function parseArgs(argv) {
+  const args = {};
+  for (const a of argv) {
+    if (!a.startsWith('--')) throw new Error(`unexpected argument: ${a}`);
+    const [k, ...rest] = a.slice(2).split('=');
+    if (!KNOWN_FLAGS.has(k)) throw new Error(`unknown flag: --${k}`);
+    args[k] = rest.length ? rest.join('=') : true;
+  }
+  for (const flag of ['dry-run', 'apply', 'force', 'allow-overwrite-legacy']) {
+    if (args[flag] !== undefined && args[flag] !== true) throw new Error(`--${flag} takes no value`);
+  }
+  const apply = args.apply === true;
+  if (apply && args['dry-run'] === true) throw new Error('--apply and --dry-run are mutually exclusive');
+
+  const force = args.force === true;
+  let days = null;
+  if (!force) {
+    days = args.days === undefined ? 7 : parseInt(args.days, 10);
+    if (!Number.isInteger(days) || days < 1) throw new Error('--days must be a positive integer');
+  }
+
+  const out = typeof args.out === 'string' ? args.out : DEFAULT_OUT;
+  if (!/^[A-Za-z0-9_.-]+$/.test(out)) throw new Error(`invalid --out collection name: ${out}`);
+  if (PROTECTED_COLLECTIONS.has(out)) throw new Error(`--out may never be a tick collection (${out})`);
+
+  const backupLegacy = typeof args['backup-legacy'] === 'string' ? args['backup-legacy'] : null;
+  if (backupLegacy !== null) {
+    if (!/^[A-Za-z0-9_.-]+$/.test(backupLegacy)) throw new Error(`invalid --backup-legacy name: ${backupLegacy}`);
+    if (PROTECTED_COLLECTIONS.has(backupLegacy) || backupLegacy === out) {
+      throw new Error('--backup-legacy must be a new collection');
+    }
+  }
+
+  return {
+    apply,
+    force,
+    days,
+    city: typeof args.city === 'string' ? args.city : null,
+    out,
+    backupLegacy,
+    allowOverwriteLegacy: args['allow-overwrite-legacy'] === true,
+  };
 }
 
-/**
- * Parse a pacing_time string like "9:25 AM" into a 0-9 bucket index.
- * 8am = 0, 9am = 1, ..., 5pm = 9. Returns null outside the window or on
- * parse failure.
- */
-function pacingTimeToBucket(pt) {
-  if (!pt) return null;
-  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(pt.trim());
-  if (!m) return null;
-  let hour = parseInt(m[1], 10);
-  const meridiem = m[3].toUpperCase();
-  if (meridiem === "PM" && hour !== 12) hour += 12;
-  if (meridiem === "AM" && hour === 12) hour = 0;
-  if (hour < 8 || hour >= 18) return null;
-  return hour - 8;
-}
-
-/** Build the ISO date string for `--days` ago as the dateFrom cutoff. */
-function buildDateFrom() {
-  if (DAYS === null) return null;
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - DAYS);
+/** Cutoff for local_date: `days` ago in UTC, minus one extra day because local_date is not UTC. */
+function dateFromForDays(days, now) {
+  if (days === null || days === undefined) return null;
+  const d = new Date(now || Date.now());
+  d.setUTCDate(d.getUTCDate() - days - 1);
   return d.toISOString().slice(0, 10);
 }
 
-// ---------------------------------------------------------------------------
-// MongoDB helpers
-// ---------------------------------------------------------------------------
-
-async function fetchTicks(col, dateFrom) {
-  const match = { bracket: { $ne: null, $exists: true } };
-  if (CITY_FILTER) match.city = CITY_FILTER;
-  if (dateFrom) match.local_date = { $gte: dateFrom };
-  return col
-    .find(match, {
-      projection: {
-        city: 1,
-        local_date: 1,
-        bracket: 1,
-        pacing_time: 1,
-        captured_at: 1,
-        yes_price_cents: 1,
-      },
-    })
-    .toArray();
+function normBracket(b) {
+  if (b === null || b === undefined) return null;
+  const s = String(b).trim();
+  return s === '' ? null : s;
 }
 
-/** Collect winning_bracket per city|date from one collection into `into` Map. */
-async function fetchWinners(col, dateFrom, into) {
-  const match = { winning_bracket: { $ne: null, $exists: true } };
-  if (CITY_FILTER) match.city = CITY_FILTER;
-  if (dateFrom) match.local_date = { $gte: dateFrom };
-  const rows = await col
-    .aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id: { city: "$city", local_date: "$local_date" },
-          winning_bracket: { $first: "$winning_bracket" },
-        },
-      },
-    ])
-    .toArray();
-  for (const r of rows) {
-    const key = `${r._id.city}|${r._id.local_date}`;
-    into.set(key, normBracket(r.winning_bracket));
+function incrementalGuard(state, currentHash) {
+  if (state.v2Count === 0) {
+    return {
+      ok: false,
+      reason: 'no feature_version 2 documents exist yet; run once with --force (all history) first',
+    };
   }
+  const others = state.hashes.map(String).filter((h) => h !== currentHash);
+  if (others.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `existing v2 documents have a different definition_hash (${others.join(', ')}; ` +
+        `current ${currentHash}); rebuild with --force`,
+    };
+  }
+  return { ok: true };
 }
 
-// ---------------------------------------------------------------------------
-// Per-bracket data building
-// ---------------------------------------------------------------------------
-
-/**
- * From raw tick documents, build a Map:
- *   "city|date" → { city, local_date, brackets: Map(bracket → { ticksPerHour, firstTick }) }
- *
- * ticksPerHour is a length-10 array indexed by pacing_time bucket (0=8am..9=5pm).
- * firstTick stores the earliest-captured_at tick's fields for first-tick signals.
- */
-function buildBracketData(docs) {
-  const data = new Map();
-  for (const doc of docs) {
-    const bracket = normBracket(doc.bracket);
-    if (!bracket) continue;
-
-    const cdKey = `${doc.city}|${doc.local_date}`;
-    if (!data.has(cdKey)) {
-      data.set(cdKey, {
-        city: doc.city,
-        local_date: doc.local_date,
-        brackets: new Map(),
-      });
-    }
-    const cd = data.get(cdKey);
-
-    if (!cd.brackets.has(bracket)) {
-      cd.brackets.set(bracket, {
-        ticksPerHour: new Array(NUM_HOUR_BUCKETS).fill(0),
-        firstTick: null,
-        // First yes_price_cents seen within each hour bucket (by captured_at order)
-        firstPricePerHour: new Array(NUM_HOUR_BUCKETS).fill(null),
-        firstCapturedAtPerHour: new Array(NUM_HOUR_BUCKETS).fill(null),
-      });
-    }
-    const br = cd.brackets.get(bracket);
-
-    // Accumulate tick in its hour bucket
-    const bucket = pacingTimeToBucket(doc.pacing_time);
-    if (bucket !== null) {
-      br.ticksPerHour[bucket]++;
-
-      // Track first price seen in this hour bucket (earliest captured_at wins)
-      if (
-        typeof doc.yes_price_cents === "number" &&
-        (br.firstCapturedAtPerHour[bucket] === null ||
-          doc.captured_at < br.firstCapturedAtPerHour[bucket])
-      ) {
-        br.firstCapturedAtPerHour[bucket] = doc.captured_at;
-        br.firstPricePerHour[bucket] = doc.yes_price_cents;
-      }
-    }
-
-    // Track first tick by earliest captured_at (lexicographic ISO string compare)
-    if (!br.firstTick || doc.captured_at < br.firstTick.captured_at) {
-      br.firstTick = {
-        captured_at: doc.captured_at,
-        pacing_time: doc.pacing_time,
-        yes_price_cents: typeof doc.yes_price_cents === "number" ? doc.yes_price_cents : null,
-      };
-    }
-  }
-  return data;
+function legacyGuard(state) {
+  if (state.legacyCount === 0) return { ok: true, action: 'none' };
+  if (state.backupLegacy) return { ok: true, action: 'backup', name: state.backupLegacy };
+  if (state.allowOverwriteLegacy) return { ok: true, action: 'overwrite_without_backup' };
+  return {
+    ok: false,
+    reason:
+      `${state.legacyCount} legacy (non-v2) documents would be overwritten and cannot be restored. ` +
+      'Re-run with --backup-legacy=<new collection name> (recommended) or --allow-overwrite-legacy.',
+  };
 }
 
-/**
- * Merge two bracketData maps (used for the "combined" method).
- * Tick counts are summed; the earlier first-tick (by captured_at) is kept.
- */
-function mergeBracketData(mapA, mapB) {
-  const merged = new Map();
+function edgeFor(resolved, hasPrice, won, price) {
+  if (!(resolved && hasPrice && won !== null)) return null;
+  return won ? 100 - price : -price;
+}
 
-  for (const [cdKey, cdA] of mapA) {
-    merged.set(cdKey, {
-      city: cdA.city,
-      local_date: cdA.local_date,
-      brackets: new Map(
-        [...cdA.brackets.entries()].map(([b, brA]) => [
-          b,
-          {
-            ticksPerHour: [...brA.ticksPerHour],
-            firstTick: brA.firstTick,
-            firstPricePerHour: [...brA.firstPricePerHour],
-            firstCapturedAtPerHour: [...brA.firstCapturedAtPerHour],
-          },
-        ])
-      ),
-    });
-  }
-
-  for (const [cdKey, cdB] of mapB) {
-    if (!merged.has(cdKey)) {
-      merged.set(cdKey, {
-        city: cdB.city,
-        local_date: cdB.local_date,
-        brackets: new Map(
-          [...cdB.brackets.entries()].map(([b, brB]) => [
-            b,
-            {
-              ticksPerHour: [...brB.ticksPerHour],
-              firstTick: brB.firstTick,
-              firstPricePerHour: [...brB.firstPricePerHour],
-              firstCapturedAtPerHour: [...brB.firstCapturedAtPerHour],
-            },
-          ])
-        ),
-      });
+/** Ticks of one collection -> votes, counting why ticks were ignored. */
+function toVotes(docs, collection, stats) {
+  const votes = [];
+  for (const d of docs) {
+    stats.ticks += 1;
+    if (!d || !d.city || !d.local_date) {
+      stats.ignored.no_city_or_date = (stats.ignored.no_city_or_date || 0) + 1;
       continue;
     }
-    const cdM = merged.get(cdKey);
-    for (const [b, brB] of cdB.brackets) {
-      if (!cdM.brackets.has(b)) {
-        cdM.brackets.set(b, {
-          ticksPerHour: [...brB.ticksPerHour],
-          firstTick: brB.firstTick,
-          firstPricePerHour: [...brB.firstPricePerHour],
-          firstCapturedAtPerHour: [...brB.firstCapturedAtPerHour],
-        });
-      } else {
-        const brM = cdM.brackets.get(b);
-        // Sum tick counts per hour bucket; keep earlier first price per hour
-        for (let i = 0; i < NUM_HOUR_BUCKETS; i++) {
-          brM.ticksPerHour[i] += brB.ticksPerHour[i];
-          // Keep the earlier captured_at price for each hour bucket
-          if (
-            brB.firstCapturedAtPerHour[i] !== null &&
-            (brM.firstCapturedAtPerHour[i] === null ||
-              brB.firstCapturedAtPerHour[i] < brM.firstCapturedAtPerHour[i])
-          ) {
-            brM.firstCapturedAtPerHour[i] = brB.firstCapturedAtPerHour[i];
-            brM.firstPricePerHour[i] = brB.firstPricePerHour[i];
-          }
-        }
-        // Keep earlier first tick across both collections
-        if (
-          brB.firstTick &&
-          (!brM.firstTick || brB.firstTick.captured_at < brM.firstTick.captured_at)
-        ) {
-          brM.firstTick = brB.firstTick;
-        }
-      }
+    const { vote, reason } = R.normalizeTickDetailed(d, collection);
+    if (!vote) {
+      stats.ignored[reason] = (stats.ignored[reason] || 0) + 1;
+      continue;
     }
+    votes.push(vote);
   }
-
-  return merged;
+  return votes;
 }
 
-// ---------------------------------------------------------------------------
-// Feature doc construction
-// ---------------------------------------------------------------------------
+function newStats() {
+  return { ticks: 0, ignored: {}, votes: 0, days: 0, docs: 0, lateVotes: 0, snapshotsByHour: new Array(R.NUM_HOURS).fill(0) };
+}
 
 /**
- * Given a fully-built bracketData map and a winners map, produce an array of
- * feature documents ready to upsert into stats_features.
+ * One method: tick docs of its collection -> feature documents (one per day x bracket).
+ * `winners` maps "city|local_date" -> winning bracket title.
  */
-function buildFeatureDocs(bracketData, winners, method, computedAt) {
-  const docs = [];
+function buildDocsForMethod({ docs, collection, method, winners, computedAt, stats }) {
+  const st = stats || newStats();
+  const votes = toVotes(docs, collection, st);
+  st.votes += votes.length;
 
-  for (const [cdKey, cd] of bracketData) {
-    const winningBracket = winners.get(cdKey) ?? null;
-    const resolved = winningBracket !== null;
+  const byDay = new Map();
+  for (const v of votes) {
+    const key = `${v.city}|${v.local_date}`;
+    let list = byDay.get(key);
+    if (!list) byDay.set(key, (list = []));
+    list.push(v);
+  }
 
-    const bracketsArr = [...cd.brackets.entries()]; // [[bracket, br], ...]
+  const out = [];
+  for (const [key, dayVotes] of byDay) {
+    const res = R.reduceDay(dayVotes);
+    st.days += 1;
+    st.lateVotes += res.late_votes;
+    res.snapshots.forEach((s, n) => { if (s) st.snapshotsByHour[n] += 1; });
 
-    // Pre-compute cumulative counts for all brackets at each hour window
-    // cumByBracket[bracket][n] = sum of ticksPerHour[0..n]
-    const cumByBracket = new Map();
-    for (const [bracket, br] of bracketsArr) {
-      const cum = new Array(NUM_HOUR_BUCKETS).fill(0);
-      let running = 0;
-      for (let n = 0; n < NUM_HOUR_BUCKETS; n++) {
-        running += br.ticksPerHour[n];
-        cum[n] = running;
-      }
-      cumByBracket.set(bracket, cum);
-    }
+    const winner = winners.get(key) ?? null;
+    const resolved = winner !== null;
+    const city = dayVotes[0].city;
+    const local_date = dayVotes[0].local_date;
 
-    // For each hour window, build a sorted list of (bracket, count) to derive ranks
-    // Stored as rankAtHour[n] = [[bracket, count], ...] sorted desc by count
-    const rankAtHour = [];
-    for (let n = 0; n < NUM_HOUR_BUCKETS; n++) {
-      const sorted = bracketsArr
-        .map(([b]) => [b, cumByBracket.get(b)[n]])
-        .sort((a, b) => b[1] - a[1]);
-      rankAtHour.push(sorted);
-    }
-
-    // Compute normalised lead margin per hour for this city-day.
-    // lead_margin[n] = (rank1_ticks - rank2_ticks) / total_ticks_through_n
-    // This is a city-day level signal (same value for every bracket on that day).
-    const leadMarginThroughHour = new Array(NUM_HOUR_BUCKETS).fill(0);
-    for (let n = 0; n < NUM_HOUR_BUCKETS; n++) {
-      const sorted = rankAtHour[n];
-      if (sorted.length === 0) continue;
-      const totalTicks = sorted.reduce((s, [, c]) => s + c, 0);
-      if (totalTicks === 0) continue;
-      const rank1Count = sorted[0][1];
-      const rank2Count = sorted.length > 1 ? sorted[1][1] : 0;
-      leadMarginThroughHour[n] = (rank1Count - rank2Count) / totalTicks;
-    }
-
-    for (const [bracket, br] of bracketsArr) {
-      const cum = cumByBracket.get(bracket);
-
-      const tickCountThroughHour = cum;
-      const rankThroughHour = new Array(NUM_HOUR_BUCKETS).fill(null);
-      const isLeaderThroughHour = new Array(NUM_HOUR_BUCKETS).fill(false);
-
-      for (let n = 0; n < NUM_HOUR_BUCKETS; n++) {
-        const sorted = rankAtHour[n]; // [[bracket, count], ...]
-        const myCount = cum[n];
-
-        // Sequential rank (1-indexed position in sorted order)
-        let rank = 1;
-        for (const [b] of sorted) {
-          if (b === bracket) {
-            rankThroughHour[n] = rank;
-            break;
-          }
-          rank++;
-        }
-
-        // is_leader: tied for the maximum cumulative count (and the max is > 0)
-        const maxCount = sorted.length > 0 ? sorted[0][1] : 0;
-        isLeaderThroughHour[n] = myCount > 0 && myCount === maxCount;
-      }
-
-      // First-tick signals
-      const ft = br.firstTick;
-      const firstTickPriceCents = ft?.yes_price_cents ?? null;
-      const firstTickHour =
-        ft?.pacing_time ? pacingTimeToBucket(ft.pacing_time) : null;
-      const hasPrice = typeof firstTickPriceCents === "number";
-
-      // Outcome
-      const won = resolved ? bracket === winningBracket : null;
-      // edge_cents: 100 - price if won, -price if lost (per $1 bet at first-tick entry price)
-      const edgeCents =
-        resolved && hasPrice && won !== null
-          ? won
-            ? 100 - firstTickPriceCents
-            : -firstTickPriceCents
-          : null;
-
-      docs.push({
-        city: cd.city,
-        local_date: cd.local_date,
-        bracket,
+    for (const b of res.brackets) {
+      const won = resolved ? b.bracket === winner : null;
+      out.push({
+        city,
+        local_date,
+        bracket: b.bracket,
         method,
-        first_tick_price_cents: firstTickPriceCents,
-        first_tick_hour: firstTickHour,
-        has_price: hasPrice,
-        tick_count_through_hour: tickCountThroughHour,
-        rank_through_hour: rankThroughHour,
-        is_leader_through_hour: isLeaderThroughHour,
-        // First yes_price_cents seen within each hour bucket for this bracket
-        price_at_hour: br.firstPricePerHour,
-        // Normalised leader gap: (rank1_ticks - rank2_ticks) / total_ticks per hour
-        // Same for every bracket on the same city-day — measures market decisiveness
-        lead_margin_through_hour: leadMarginThroughHour,
-        final_tick_count: tickCountThroughHour[NUM_HOUR_BUCKETS - 1],
-        final_rank: rankThroughHour[NUM_HOUR_BUCKETS - 1],
+        feature_version: res.feature_version,
+        definition_hash: res.definition_hash,
+        late_votes: res.late_votes,
+        // first-tick dimensions (price, first_tick_hour) read these
+        first_tick_price_cents: b.first_tick_price_cents,
+        first_tick_hour: b.first_tick_hour,
+        has_price: b.has_price,
+        // point-in-time arrays, length 10, null when there is no snapshot for that hour
+        snapshot_ts: b.snapshot_ts,
+        snapshot_seq: b.snapshot_seq,
+        snapshot_vote_bracket: b.snapshot_vote_bracket,
+        tick_count_asof: b.tick_count_asof,
+        rank_asof: b.rank_asof,
+        rank_comp_asof: b.rank_comp_asof,
+        is_leader_asof: b.is_leader_asof,
+        lead_margin_asof: b.lead_margin_asof,
+        total_votes_asof: b.total_votes_asof,
+        entry_price_cents: b.entry_price_cents,
+        entry_price_source: b.entry_price_source,
+        entry_price_age_s: b.entry_price_age_s,
+        rank_trend_asof: b.rank_trend_asof,
+        // outcome / end-of-day fields (not pinnable)
+        final_tick_count: b.final_tick_count,
+        final_rank: b.final_rank,
         resolved,
         won,
-        edge_cents: edgeCents,
+        edge_cents: edgeFor(resolved, b.has_price, won, b.first_tick_price_cents),
         computed_at: computedAt,
       });
     }
   }
+  st.docs += out.length;
+  return out;
+}
 
-  return docs;
+// ---------------------------------------------------------------------------
+// Database helpers (only used by main; never run by the tests)
+// ---------------------------------------------------------------------------
+
+async function fetchTicks(col, dateFrom, city) {
+  const match = { bracket: { $ne: null, $exists: true } };
+  if (city) match.city = city;
+  if (dateFrom) match.local_date = { $gte: dateFrom };
+  return col
+    .find(match, {
+      projection: {
+        city: 1, local_date: 1, bracket: 1, pacing_time: 1, captured_at: 1,
+        yes_price_cents: 1, prices_all: 1,
+      },
+    })
+    .toArray();
+}
+
+/**
+ * winning_bracket per "city|date". Sorted before $first so the pick is deterministic, and every
+ * distinct value is collected so a day with more than one winner can be reported.
+ */
+async function fetchWinners(col, label, dateFrom, city, into, warnings) {
+  const match = { winning_bracket: { $ne: null, $exists: true } };
+  if (city) match.city = city;
+  if (dateFrom) match.local_date = { $gte: dateFrom };
+  const rows = await col
+    .aggregate(
+      [
+        { $match: match },
+        { $sort: { captured_at: 1, _id: 1 } },
+        {
+          $group: {
+            _id: { city: '$city', local_date: '$local_date' },
+            winning_bracket: { $first: '$winning_bracket' },
+            all: { $addToSet: '$winning_bracket' },
+          },
+        },
+      ],
+      { allowDiskUse: true }
+    )
+    .toArray();
+  for (const r of rows) {
+    const key = `${r._id.city}|${r._id.local_date}`;
+    const distinct = [...new Set(r.all.map(normBracket).filter(Boolean))];
+    if (distinct.length > 1) {
+      warnings.push(`WARNING ${label} ${key}: more than one winning_bracket value: ${distinct.join(' | ')}`);
+    }
+    const w = normBracket(r.winning_bracket);
+    if (w === null) continue;
+    if (into.has(key) && into.get(key) !== w) {
+      warnings.push(`WARNING ${key}: winner differs between collections (${into.get(key)} vs ${w} in ${label}); keeping the first`);
+      continue;
+    }
+    if (!into.has(key)) into.set(key, w);
+  }
+}
+
+async function readGuardState(outCol) {
+  const [v2Count, hashes, legacyCount] = await Promise.all([
+    outCol.countDocuments({ feature_version: 2 }),
+    outCol.distinct('definition_hash', { feature_version: 2 }),
+    outCol.countDocuments({ feature_version: { $ne: 2 } }),
+  ]);
+  return { v2Count, hashes, legacyCount };
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-async function main() {
-  const client = new MongoClient(MONGO_URI);
+async function main(argv) {
+  require('dotenv').config();
+  const opts = parseArgs(argv);
+  if (!process.env.MONGO_URI) {
+    console.error('Set the MONGO_URI environment variable first.');
+    process.exit(1);
+  }
+  const { MongoClient } = require('mongodb');
+
+  const dateFrom = opts.force ? null : dateFromForDays(opts.days);
+  console.log(`Mode: ${opts.apply ? 'APPLY (writes to ' + opts.out + ')' : 'DRY RUN (no writes)'}`);
+  console.log(
+    opts.force
+      ? 'Window: full history (--force)'
+      : `Window: incremental --days=${opts.days}, local_date >= ${dateFrom} (includes one safety day)`
+  );
+  console.log(`Output collection: ${opts.out}`);
+  console.log(`feature_version=${R.FEATURE_VERSION} definition_hash=${R.DEFINITION_HASH}`);
+  if (opts.city) console.log(`City filter: ${opts.city}`);
+
+  const client = new MongoClient(process.env.MONGO_URI);
   await client.connect();
-  console.log("Connected to MongoDB.");
+  try {
+    const db = client.db('weather');
+    const outCol = db.collection(opts.out);
 
-  const db = client.db("weather");
-  const linearCol = db.collection("high-temp");
-  const reciprocalCol = db.collection("reciprocal");
-  const featuresCol = db.collection("stats_features");
-
-  // Ensure indexes (idempotent)
-  if (!DRY_RUN) {
-    await featuresCol.createIndex(
-      { city: 1, local_date: 1, bracket: 1, method: 1 },
-      { unique: true, name: "city_date_bracket_method_unique" }
+    const guardState = await readGuardState(outCol);
+    console.log(
+      `Output collection now: ${guardState.v2Count} v2 docs, ${guardState.legacyCount} legacy (non-v2) docs, ` +
+      `v2 hashes: [${guardState.hashes.join(', ')}]`
     );
-    await featuresCol.createIndex({ method: 1 }, { name: "method" });
-    await featuresCol.createIndex({ local_date: 1 }, { name: "local_date" });
-    await featuresCol.createIndex(
-      { method: 1, city: 1, local_date: 1 },
-      { name: "method_city_date" }
-    );
-    console.log("Indexes ensured.");
-  }
 
-  const dateFrom = buildDateFrom();
-  if (dateFrom) {
-    console.log(`Mode: incremental  --days=${DAYS}  dateFrom=${dateFrom}`);
-  } else {
-    console.log("Mode: full history  (--force)");
-  }
-  if (CITY_FILTER) console.log(`City filter: ${CITY_FILTER}`);
-  if (DRY_RUN) console.log("DRY RUN — no writes.");
-
-  const computedAt = new Date();
-
-  // Fetch raw tick docs from both collections
-  console.log("\nFetching ticks from high-temp...");
-  const linearDocs = await fetchTicks(linearCol, dateFrom);
-  console.log(`  ${linearDocs.length.toLocaleString()} docs`);
-
-  console.log("Fetching ticks from reciprocal...");
-  const reciprocalDocs = await fetchTicks(reciprocalCol, dateFrom);
-  console.log(`  ${reciprocalDocs.length.toLocaleString()} docs`);
-
-  // Fetch resolved outcomes from both collections (merge)
-  console.log("Fetching resolved outcomes...");
-  const winners = new Map();
-  await fetchWinners(linearCol, dateFrom, winners);
-  await fetchWinners(reciprocalCol, dateFrom, winners);
-  console.log(`  ${winners.size.toLocaleString()} resolved city-dates`);
-
-  // Build per-bracket data for each method
-  console.log("\nBuilding bracket data structures...");
-  const linearData = buildBracketData(linearDocs);
-  const reciprocalData = buildBracketData(reciprocalDocs);
-  const combinedData = mergeBracketData(linearData, reciprocalData);
-  console.log(
-    `  linear: ${linearData.size} city-dates, reciprocal: ${reciprocalData.size} city-dates, combined: ${combinedData.size} city-dates`
-  );
-
-  const methods = [
-    { method: "linear", data: linearData },
-    { method: "reciprocal", data: reciprocalData },
-    { method: "combined", data: combinedData },
-  ];
-
-  let totalDocs = 0;
-  for (const { method, data } of methods) {
-    console.log(`\nBuilding feature docs for method=${method}...`);
-    const docs = buildFeatureDocs(data, winners, method, computedAt);
-    console.log(`  ${docs.length.toLocaleString()} feature docs`);
-    totalDocs += docs.length;
-
-    if (DRY_RUN) continue;
-
-    // Upsert in batches
-    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
-      const batch = docs.slice(i, i + BATCH_SIZE);
-      const ops = batch.map((doc) => ({
-        replaceOne: {
-          filter: {
-            city: doc.city,
-            local_date: doc.local_date,
-            bracket: doc.bracket,
-            method: doc.method,
-          },
-          replacement: doc,
-          upsert: true,
-        },
-      }));
-      await featuresCol.bulkWrite(ops, { ordered: false });
-      process.stdout.write(`  upserted ${Math.min(i + BATCH_SIZE, docs.length)}/${docs.length}\r`);
+    if (!opts.force) {
+      const g = incrementalGuard(guardState, R.DEFINITION_HASH);
+      if (!g.ok && opts.apply) {
+        console.error(`REFUSING incremental run: ${g.reason}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (!g.ok) console.log(`NOTE: a real incremental --apply would be REFUSED: ${g.reason}`);
     }
-    console.log(`  Done.${" ".repeat(20)}`);
-  }
 
-  console.log(
-    `\nComplete. Total feature docs: ${totalDocs.toLocaleString()}. computed_at: ${computedAt.toISOString()}`
-  );
-  await client.close();
+    const warnings = [];
+    const winners = new Map();
+    for (const t of TICK_COLLECTIONS) {
+      await fetchWinners(db.collection(t.collection), t.collection, dateFrom, opts.city, winners, warnings);
+    }
+    console.log(`Resolved city-dates: ${winners.size.toLocaleString()}`);
+    warnings.forEach((w) => console.warn(w));
+
+    const computedAt = new Date();
+    const allDocs = [];
+    for (const t of TICK_COLLECTIONS) {
+      const ticks = await fetchTicks(db.collection(t.collection), dateFrom, opts.city);
+      const stats = newStats();
+      const docs = buildDocsForMethod({ docs: ticks, collection: t.collection, method: t.method, winners, computedAt, stats });
+      console.log(
+        `\n[${t.method}] ticks=${stats.ticks.toLocaleString()} votes=${stats.votes.toLocaleString()} ` +
+        `city-days=${stats.days.toLocaleString()} feature docs=${stats.docs.toLocaleString()} late_votes=${stats.lateVotes}`
+      );
+      console.log(`  ignored ticks: ${JSON.stringify(stats.ignored)}`);
+      console.log(`  city-days with a snapshot, by hour 0..9: ${stats.snapshotsByHour.join(' ')}`);
+      allDocs.push(...docs);
+    }
+
+    if (!opts.apply) {
+      const lg = legacyGuard({ legacyCount: guardState.legacyCount, backupLegacy: opts.backupLegacy, allowOverwriteLegacy: opts.allowOverwriteLegacy });
+      console.log(`\nDRY RUN: would write ${allDocs.length.toLocaleString()} documents to ${opts.out}. Nothing was written.`);
+      if (opts.force && !lg.ok) console.log(`Note: a real --force --apply would currently be refused: ${lg.reason}`);
+      if (opts.force && lg.ok && lg.action === 'backup') console.log(`A real run would first back up legacy docs into new collection ${lg.name}.`);
+      return;
+    }
+
+    // ---- APPLY ----
+    if (opts.force) {
+      const lg = legacyGuard({ legacyCount: guardState.legacyCount, backupLegacy: opts.backupLegacy, allowOverwriteLegacy: opts.allowOverwriteLegacy });
+      if (!lg.ok) {
+        console.error(`REFUSING to write: ${lg.reason}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (lg.action === 'backup') {
+        const exists = await db.listCollections({ name: lg.name }, { nameOnly: true }).hasNext();
+        if (exists) {
+          console.error(`REFUSING to write: backup collection ${lg.name} already exists`);
+          process.exitCode = 1;
+          return;
+        }
+        await outCol.aggregate([{ $match: { feature_version: { $ne: 2 } } }, { $out: lg.name }]).toArray();
+        const copied = await db.collection(lg.name).countDocuments({});
+        console.log(`Backed up ${copied} legacy docs into ${lg.name}`);
+        if (copied !== guardState.legacyCount) {
+          console.error(`REFUSING to write: backup has ${copied} docs, expected ${guardState.legacyCount}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
+    }
+
+    await outCol.createIndex(
+      { city: 1, local_date: 1, bracket: 1, method: 1 },
+      { unique: true, name: 'city_date_bracket_method_unique' }
+    );
+    await outCol.createIndex({ method: 1, city: 1, local_date: 1 }, { name: 'method_city_date' });
+    await outCol.createIndex({ local_date: 1 }, { name: 'local_date' });
+    console.log('Indexes ensured on ' + opts.out);
+
+    for (let i = 0; i < allDocs.length; i += BATCH_SIZE) {
+      const batch = allDocs.slice(i, i + BATCH_SIZE);
+      await outCol.bulkWrite(
+        batch.map((doc) => ({
+          replaceOne: {
+            filter: { city: doc.city, local_date: doc.local_date, bracket: doc.bracket, method: doc.method },
+            replacement: doc,
+            upsert: true,
+          },
+        })),
+        { ordered: false }
+      );
+      process.stdout.write(`  upserted ${Math.min(i + BATCH_SIZE, allDocs.length)}/${allDocs.length}\r`);
+    }
+    console.log(`\nComplete. Wrote ${allDocs.length.toLocaleString()} documents. computed_at: ${computedAt.toISOString()}`);
+  } finally {
+    await client.close();
+  }
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+module.exports = {
+  parseArgs,
+  dateFromForDays,
+  incrementalGuard,
+  legacyGuard,
+  edgeFor,
+  newStats,
+  toVotes,
+  buildDocsForMethod,
+  PROTECTED_COLLECTIONS,
+  TICK_COLLECTIONS,
+  DEFAULT_OUT,
+};
+
+if (require.main === module) {
+  main(process.argv.slice(2)).catch((e) => {
+    console.error(e && e.message ? e.message : e);
+    process.exit(1);
+  });
+}

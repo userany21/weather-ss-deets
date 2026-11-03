@@ -26,12 +26,21 @@ const path = require("path");
 const BUILDER = path.join(__dirname, "build-feature-table.js");
 const DAYS = process.env.REFRESH_DAYS ?? "7";
 
+// The builder is a DRY RUN unless --apply is passed. This wrapper only forwards --apply when it
+// is asked to (its own --apply argument, or REFRESH_APPLY=1), so deploying new code can never
+// start writing by surprise. After cutover, add --apply (or REFRESH_APPLY=1) to the cron job.
+const APPLY =
+  process.argv.slice(2).includes("--apply") || process.env.REFRESH_APPLY === "1";
+const builderArgs = [BUILDER, `--days=${DAYS}`];
+if (APPLY) builderArgs.push("--apply");
+
 console.log(
-  `[refresh-feature-table] ${new Date().toISOString()} — running builder --days=${DAYS}`
+  `[refresh-feature-table] ${new Date().toISOString()} — running builder --days=${DAYS}` +
+    (APPLY ? " --apply" : " (DRY RUN: pass --apply or set REFRESH_APPLY=1 to write)")
 );
 
 try {
-  execFileSync(process.execPath, [BUILDER, `--days=${DAYS}`], {
+  execFileSync(process.execPath, builderArgs, {
     stdio: "inherit",
     env: process.env,
   });
