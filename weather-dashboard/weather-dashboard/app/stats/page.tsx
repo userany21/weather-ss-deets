@@ -179,7 +179,12 @@ const SCROLL =
 // Utility helpers
 // ---------------------------------------------------------------------------
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const r = await fetch(url);
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(body?.error ?? `HTTP ${r.status}`);
+  return body;
+};
 
 /** Serialise ActiveDim[] to the "by" URL param format, e.g. "lead_margin:4,rank_trend:4" */
 function dimsToByParam(dims: ActiveDim[]): string {
@@ -626,7 +631,7 @@ export default function StatsExplorerPage() {
     [activeDims, selectedCities, dateFrom, dateTo, method, minCount, resolvedOnly, dedupe]
   );
 
-  const { data, isLoading } = useSWR<StatsResponse>(apiUrl, fetcher, {
+  const { data, error: swrError, isLoading } = useSWR<StatsResponse>(apiUrl, fetcher, {
     revalidateOnFocus: false,
   });
 
@@ -672,7 +677,7 @@ export default function StatsExplorerPage() {
       }
     }
     return hour >= 0
-      ? `Edge = outcome − the ${HOURS[hour] ?? `H${hour}`} price (latest hour used by any filter)`
+      ? `Hour filters use data from before the ${HOURS[hour] ?? `H${hour}`} hour. Edge = outcome − that bracket's first tick price during the ${HOURS[hour] ?? `H${hour}`} hour (only brackets that tick in that hour are included).`
       : "Edge = outcome − the first-tick price";
   }, [activeDims, registry]);
 
@@ -833,10 +838,10 @@ export default function StatsExplorerPage() {
   const yFmt = (v: number) =>
     metric === "edge" ? `${v.toFixed(0)}¢` : `${(v * 100).toFixed(0)}%`;
 
-  const bucketCount    = data?.buckets.length ?? 0;
+  const bucketCount    = Array.isArray(data?.buckets) ? data!.buckets.length : 0;
   const hasBuckets     = bucketCount > 0;
   const noDimsSelected = activeDims.length === 0;
-  const noData         = !isLoading && !noDimsSelected && !hasBuckets;
+  const noData         = !isLoading && !noDimsSelected && !hasBuckets && !swrError && !data?.error;
 
   const chartCaption = [
     `${bucketCount.toLocaleString()} bucket${bucketCount !== 1 ? "s" : ""}`,
@@ -1229,9 +1234,11 @@ export default function StatsExplorerPage() {
       )}
 
       {/* Error state */}
-      {!isLoading && data?.error && (
+      {!isLoading && (swrError || data?.error) && (
         <div className={`${CARD} mt-4 border-[#ff5566]/40 py-8 text-center`}>
-          <div className="text-sm text-[#ff5566]">{data.error}</div>
+          <div className="text-sm text-[#ff5566]">
+            {(swrError as Error | undefined)?.message ?? data?.error}
+          </div>
         </div>
       )}
 

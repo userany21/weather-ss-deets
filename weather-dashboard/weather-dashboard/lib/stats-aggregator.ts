@@ -133,6 +133,24 @@ function clampRank(rank: number): string {
   return rank >= 4 ? "4+" : String(rank);
 }
 
+/**
+ * Hour-N signals use only data known BEFORE hour N starts: everything through the
+ * end of hour N-1. Returns -1 when there is no earlier hour (N = 0).
+ * Entry price is NOT shifted: it is still the bracket's first priced tick in hour N.
+ */
+function asof(n: number): number {
+  return clampHour(n) - 1;
+}
+
+/** Rows without the legacy arrays (e.g. feature_version 2 rows) are skipped, never thrown on. */
+function hasLegacyArrays(row: FeatureRow): boolean {
+  return (
+    Array.isArray(row.rank_through_hour) &&
+    Array.isArray(row.tick_count_through_hour) &&
+    Array.isArray(row.is_leader_through_hour)
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Dimension Registry
 // ---------------------------------------------------------------------------
@@ -167,24 +185,25 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   // ------------------------------------------------------------------
   {
     id: "leader",
-    label: "Hour-N Leader",
+    label: "Leader before Hour-N",
     timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
-      options: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-      default: 0,
+      options: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      default: 1,
     },
-    bucket(row, { n = 0 }) {
-      const idx = clampHour(n);
+    bucket(row, { n = 1 }) {
+      const idx = asof(n); // data through the end of hour N-1
+      if (idx < 0 || !hasLegacyArrays(row)) return null;
       const val = row.is_leader_through_hour[idx] ? "true" : "false";
-      return `leader:${idx}:${val}`;
+      return `leader:${clampHour(n)}:${val}`;
     },
     bucketLabel(key) {
       const parts = key.split(":");
       const idx = Number(parts[1]);
       const isLeader = parts[2] === "true";
-      return `Leader @${HOUR_LABELS[idx] ?? `H${idx}`}: ${isLeader ? "Yes" : "No"}`;
+      return `Leader before ${HOUR_LABELS[idx] ?? `H${idx}`}: ${isLeader ? "Yes" : "No"}`;
     },
   },
 
@@ -292,25 +311,28 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   // ------------------------------------------------------------------
   {
     id: "rank_at_hour",
-    label: "Rank at Hour-N",
+    label: "Rank before Hour-N",
     timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
-      options: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-      default: 0,
+      options: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      default: 1,
     },
-    bucket(row, { n = 0 }) {
-      const idx = clampHour(n);
+    bucket(row, { n = 1 }) {
+      const idx = asof(n); // data through the end of hour N-1
+      if (idx < 0 || !hasLegacyArrays(row)) return null;
+      // A bracket with zero votes by then has no real rank
+      if ((row.tick_count_through_hour[idx] ?? 0) === 0) return null;
       const rank = row.rank_through_hour[idx];
       if (rank == null) return null;
-      return `rank_h:${idx}:${clampRank(rank)}`;
+      return `rank_h:${clampHour(n)}:${clampRank(rank)}`;
     },
     bucketLabel(key, { n = 0 }) {
       const parts = key.split(":");
       const idx = Number(parts[1]);
       const r = parts[2];
-      return `Rank ${r} @${HOUR_LABELS[idx] ?? `H${idx}`}`;
+      return `Rank ${r} before ${HOUR_LABELS[idx] ?? `H${idx}`}`;
     },
   },
 
@@ -349,24 +371,25 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   // ------------------------------------------------------------------
   {
     id: "lead_margin",
-    label: "Lead Margin at Hour-N",
+    label: "Lead Margin before Hour-N",
     timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
-      options: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      options: [1, 2, 3, 4, 5, 6, 7, 8, 9],
       default: 1,
     },
     bucket(row, { n = 1 }) {
-      const idx = clampHour(n);
+      const idx = asof(n); // data through the end of hour N-1
+      if (idx < 0 || !hasLegacyArrays(row)) return null;
       const margin = (row.lead_margin_through_hour ?? [])[idx] ?? null;
-      // Exclude rows with no ticks at all by hour N
+      // Exclude rows with no ticks at all before hour N
       if (margin == null || row.tick_count_through_hour[idx] === 0) return null;
       const tier =
         margin < 0.15 ? "tight" :
         margin < 0.40 ? "moderate" :
         "decisive";
-      return `lm:${idx}:${tier}`;
+      return `lm:${clampHour(n)}:${tier}`;
     },
     bucketLabel(key) {
       const parts = key.split(":");
@@ -376,7 +399,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
         tier === "tight"    ? "Tight (<15%)"       :
         tier === "moderate" ? "Moderate (15–40%)"  :
                               "Decisive (>40%)";
-      return `Lead Margin@${HOUR_LABELS[idx] ?? `H${idx}`}: ${label}`;
+      return `Lead Margin before ${HOUR_LABELS[idx] ?? `H${idx}`}: ${label}`;
     },
   },
 
@@ -387,18 +410,21 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
   // ------------------------------------------------------------------
   {
     id: "rank_trend",
-    label: "Rank Trend at Hour-N",
+    label: "Rank Trend before Hour-N",
     timing: "hour",
     configSchema: {
       key: "n",
       type: "select",
-      options: [2, 3, 4, 5, 6, 7, 8, 9],
-      default: 3,
+      options: [3, 4, 5, 6, 7, 8, 9],
+      default: 4,
     },
-    bucket(row, { n = 3 }) {
-      const idx = clampHour(n);
-      const prevIdx = Math.max(0, idx - 2);
-      if (idx === prevIdx) return null; // guard: shouldn't happen given options start at 2
+    bucket(row, { n = 4 }) {
+      const idx = asof(n);       // end of hour N-1
+      const prevIdx = idx - 2;   // end of hour N-3
+      if (idx < 0 || prevIdx < 0 || !hasLegacyArrays(row)) return null;
+      // Both snapshots need real votes, otherwise the rank is meaningless
+      if ((row.tick_count_through_hour[idx] ?? 0) === 0) return null;
+      if ((row.tick_count_through_hour[prevIdx] ?? 0) === 0) return null;
       const nowRank = row.rank_through_hour[idx];
       const prevRank = row.rank_through_hour[prevIdx];
       if (nowRank == null || prevRank == null) return null;
@@ -406,7 +432,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
         nowRank < prevRank ? "rising"  :
         nowRank > prevRank ? "falling" :
         "stable";
-      return `rt:${idx}:${trend}`;
+      return `rt:${clampHour(n)}:${trend}`;
     },
     bucketLabel(key) {
       const parts = key.split(":");
@@ -415,7 +441,7 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
       const arrow =
         trend === "rising"  ? "↑" :
         trend === "falling" ? "↓" : "→";
-      return `Rank Trend@${HOUR_LABELS[idx] ?? `H${idx}`}: ${arrow} ${trend.charAt(0).toUpperCase() + trend.slice(1)}`;
+      return `Rank Trend before ${HOUR_LABELS[idx] ?? `H${idx}`}: ${arrow} ${trend.charAt(0).toUpperCase() + trend.slice(1)}`;
     },
   },
 

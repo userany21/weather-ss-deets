@@ -210,9 +210,20 @@ export async function GET(req: NextRequest) {
   // Entry rule — the SAME function the Stats table uses, so scan and backtest
   // cannot drift. Entry hour = latest hour used by any filter.
   const entry = resolveEntry(dimensions);
+  if (entry.kind === "none") {
+    return NextResponse.json(
+      {
+        error:
+          "not tradeable in live: a filter uses end-of-day data (Final Rank / Final Tick Count)",
+      },
+      { status: 400 }
+    );
+  }
   const entryText = entryLabel(entry);
   // Hour used for the display signals (lead margin %, rank trend)
-  const criteriaHour = entry.kind === "hour" ? entry.n : 4;
+  const entryHour = entry.kind === "hour" ? entry.n : 5;
+  // Signals use data through the END of the hour before the entry hour (matches the registry)
+  const criteriaHour = Math.max(0, entryHour - 1);
   const prevHour = Math.max(0, criteriaHour - 2); // 2-hour lookback (matches rank_trend)
 
   // First-tick dimensions only make sense for the FIRST prediction of the day
@@ -261,7 +272,7 @@ export async function GET(req: NextRequest) {
       // Entry price at the same moment as the filters. No price = could not buy it,
       // so it is not a match (same rule as the Stats table).
       const { price: entryPrice } = entryFor(row, entry);
-      if (entry.kind !== "none" && entryPrice == null) continue;
+      if (entryPrice == null) continue;
 
       // Local time for this city
       const cfg = getCityConfig(row.city);

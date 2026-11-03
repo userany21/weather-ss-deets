@@ -490,13 +490,13 @@ export async function getLiveFeatures(
     method !== "reciprocal"
       ? linearCol
           .find(baseMatch, { projection })
-          .sort({ captured_at: 1 })
+          .sort({ captured_at: 1, _id: 1 })
           .toArray()
       : Promise.resolve([]),
     method !== "linear"
       ? reciprocalCol
           .find(baseMatch, { projection })
-          .sort({ captured_at: 1 })
+          .sort({ captured_at: 1, _id: 1 })
           .toArray()
       : Promise.resolve([]),
   ]);
