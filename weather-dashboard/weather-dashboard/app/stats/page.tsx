@@ -16,6 +16,7 @@ import {
 import { CITIES } from "@/lib/cities-config";
 import LocalTimesPanel from "@/components/LocalTimesPanel";
 import DayModal from "@/components/DayModal";
+import ArmButton from "@/components/ArmButton";
 
 // ---------------------------------------------------------------------------
 // API response types (mirrors what /api/stats returns)
@@ -1545,6 +1546,14 @@ export default function StatsExplorerPage() {
                   >
                     <span className="capitalize text-[#8a97b1]">{c.method}:</span>
                     <span className="font-mono text-white">{c.label}</span>
+                    <ArmButton
+                      label={c.label}
+                      criteriaKey={c.key}
+                      by={dimsToByParam(c.dims)}
+                      method={c.method}
+                      cities={selectedCities}
+                      dims={c.dims}
+                    />
                     <button
                       onClick={() => unpinRow(c.key)}
                       className="ml-1 leading-none text-[#8a97b1] hover:text-white"
