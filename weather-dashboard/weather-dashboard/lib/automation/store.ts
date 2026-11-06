@@ -117,7 +117,7 @@ export async function createRuleIfNew(input: NewRule): Promise<{ rule: RuleRow; 
       .select("*")
       .eq("criteria_key", input.criteria_key)
       .eq("method", input.method)
-      .eq("cities", input.cities)
+      .eq("cities", `{${input.cities.join(",")}}`)
       .limit(1);
     if (error) fail("findRule", error);
     return data && data.length > 0 ? (data[0] as RuleRow) : null;
