@@ -63,6 +63,11 @@ export function cityKey(city: unknown): string;
 export function scheduleFor(city: unknown): CitySchedule | null;
 export function closingMinute(city: unknown): number | null;
 export function ticksInHour(city: unknown): number[];
+export function pickClosingTicks<T extends { p: { hour24: number; minute: number }; cap: number }>(
+  items: readonly T[],
+  hour24: number,
+  minMinute: number,
+): T[];
 export function parsePacingTime(label: unknown): { hour24: number; minute: number } | null;
 export function formatLabel(hour24: number, minute: number): string;
 export function localParts(date: Date, tz: string): { date: string; hour: number; minute: number };

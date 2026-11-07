@@ -13,17 +13,19 @@
  *     rank_at_hour, leader, lead_margin, rank_trend  read the hour BEFORE their label -> bucket n - 1
  *     price_at_hour                                  reads the price inside hour n     -> bucket n
  *   If a pin mixes dimensions, the decision bucket is the latest of them.
- *   The order is sent on the CLOSING TICK of the decision bucket: the last scheduled tick
- *   whose pacing_time is still inside that clock hour. Not 9AM. Not 10AM. Not the next hour's first tick.
- *   "Rank 1 before 12PM" is rank_at_hour n=4 -> bucket 3 -> the last tick labelled 11:xx.
+ *   The order is sent on the CLOSING TICK of the decision bucket: the last tick in that
+ *   clock hour at or after the city's nominal closing minute. Not 9AM. Not 10AM. Not the next hour's first tick.
+ *   "Rank 1 before 12PM" is rank_at_hour n=4 -> bucket 3 -> the last 11AM tick at or after the close.
  *
  *   Closing minute = offset + floor((59 - offset) / cadence) * cadence
- *     15 min, offset 0   -> :45        (US cities)
- *     10 min, offset 9   -> :59        (Hong Kong)
+ *     15 min, offset 0   -> :45        (US cities, nominal)
+ *     10 min, offset 0   -> :50        (Hong Kong)
  *     30 min, offset 0   -> :30        (Beijing, Shanghai, Tokyo, Seoul, Singapore, Madrid, Paris)
  *     30 min, offset 20  -> :50        (London, Munich, Milan)
  *     30 min, offset 25  -> :55        (Amsterdam)
  *     60 min, offset 0   -> :00        (Shenzhen)
+ *   Hong Kong close is :50.
+ *   US nominal close is :45. Real labels are :47 to :53, matched as "last tick at or after :45".
  *   Seoul never prints :45. Waiting for it means Seoul never fires.
  *
  *   Rules with no hour-timed dimension decide on the city's first valid prediction (FIRST_TICK_WINDOW).
@@ -43,7 +45,7 @@ const CITY_SCHEDULE = Object.freeze({
   nyc: { tz: 'America/New_York', cadence: 15, offset: 0 },
   atlanta: { tz: 'America/New_York', cadence: 15, offset: 0 },
   miami: { tz: 'America/New_York', cadence: 15, offset: 0 },
-  'hong kong': { tz: 'Asia/Hong_Kong', cadence: 10, offset: 9 },
+  'hong kong': { tz: 'Asia/Hong_Kong', cadence: 10, offset: 0 },
   shenzhen: { tz: 'Asia/Shanghai', cadence: 60, offset: 0 },
   beijing: { tz: 'Asia/Shanghai', cadence: 30, offset: 0 },
   shanghai: { tz: 'Asia/Shanghai', cadence: 30, offset: 0 },
@@ -141,6 +143,20 @@ function ticksInHour(city) {
   const out = [];
   for (let m = s.offset; m < 60; m += s.cadence) out.push(m);
   return out;
+}
+
+/** US labels move by a few minutes, so an exact match cannot work. */
+function pickClosingTicks(items, hour24, minMinute) {
+  const kept = [];
+  for (const item of items) {
+    if (item.p.hour24 === hour24 && item.p.minute >= minMinute) kept.push(item);
+  }
+  if (kept.length === 0) return [];
+  let highest = kept[0].p.minute;
+  for (const item of kept) {
+    if (item.p.minute > highest) highest = item.p.minute;
+  }
+  return kept.filter((item) => item.p.minute === highest);
 }
 
 /** "11:30 AM" -> { hour24: 11, minute: 30 }. Null when it does not parse. */
@@ -287,7 +303,7 @@ function gate(args) {
   if (cls.kind === 'closing') {
     const h = cls.bucket + FIRST_HOUR24;
     const m = closingMinute(city);
-    target = parsed.filter((x) => x.p.hour24 === h && x.p.minute === m);
+    target = pickClosingTicks(parsed, h, m);
   } else {
     const w = FIRST_TICK_WINDOW[cityKey(city)];
     let first = null;
@@ -390,6 +406,7 @@ module.exports = {
   scheduleFor,
   closingMinute,
   ticksInHour,
+  pickClosingTicks,
   parsePacingTime,
   formatLabel,
   localParts,

@@ -11,7 +11,7 @@ const utc = (y, mo, d, h, mi) => new Date(Date.UTC(y, mo - 1, d, h, mi));
 test('closing minute matches the schedule table for every cadence group', () => {
   const expected = {
     'san francisco': 45, seattle: 45, 'los angeles': 45, nyc: 45, atlanta: 45, miami: 45,
-    'hong kong': 59,
+    'hong kong': 50,
     beijing: 30, shanghai: 30, tokyo: 30, seoul: 30, singapore: 30, madrid: 30, paris: 30,
     shenzhen: 0,
     london: 50, munich: 50, milan: 50,
@@ -24,7 +24,7 @@ test('closing minute matches the schedule table for every cadence group', () => 
 });
 
 test('ticks inside an hour', () => {
-  assert.deepEqual(e.ticksInHour('hong kong'), [9, 19, 29, 39, 49, 59]);
+  assert.deepEqual(e.ticksInHour('hong kong'), [0, 10, 20, 30, 40, 50]);
   assert.deepEqual(e.ticksInHour('seoul'), [0, 30]);
   assert.deepEqual(e.ticksInHour('shenzhen'), [0]);
   assert.deepEqual(e.ticksInHour('london'), [20, 50]);
@@ -155,11 +155,100 @@ test('US city closes at 11:45 Pacific', () => {
   assert.equal(missing.state, 'missing');
 });
 
-test('Hong Kong closes at 11:59 and the window crosses into 12:0x', () => {
-  // HKT is UTC+8. 12:02 local = 04:02Z
-  const r = e.gate({ cls: closing11, city: 'hong kong', now: utc(2026, 11, 4, 4, 2), ticks: [tick('11:59 AM', utc(2026, 11, 4, 4, 1))] });
+test('Hong Kong closes at 11:50 and the window crosses into 12:0x', () => {
+  // HKT is UTC+8. 12:02 local = 04:02Z. Nominal close is :50, grace is 20, so 12:02 is still inside.
+  const ticks = ['11:00 AM', '11:10 AM', '11:20 AM', '11:30 AM', '11:40 AM', '11:50 AM'].map((label, i) =>
+    tick(label, utc(2026, 11, 4, 3, i * 10 + 1)),
+  );
+  const r = e.gate({ cls: closing11, city: 'hong kong', now: utc(2026, 11, 4, 4, 2), ticks });
   assert.equal(r.state, 'ready');
-  assert.equal(r.label, '11:59 AM');
+  assert.equal(r.label, '11:50 AM');
+});
+
+test('SF ticks :02 :17 :32 :47 pick :47', () => {
+  const minutes = [2, 17, 32, 47];
+  const items = minutes.map((minute) => ({ p: { hour24: 11, minute }, cap: minute }));
+  assert.deepEqual(e.pickClosingTicks(items, 11, e.closingMinute('san francisco')).map((x) => x.p.minute), [47]);
+  // PST: 11:48 local = 19:48Z. Nominal close is :45, so the window is open.
+  const ticks = minutes.map((minute) => tick(`11:${String(minute).padStart(2, '0')} AM`, utc(2026, 11, 4, 19, minute)));
+  const r = e.gate({ cls: closing11, city: 'san francisco', now: utc(2026, 11, 4, 19, 48), ticks });
+  assert.equal(r.state, 'ready');
+  assert.equal(r.label, '11:47 AM');
+});
+
+test('Miami ticks :05 :21 :37 :53 pick :53', () => {
+  const minutes = [5, 21, 37, 53];
+  const items = minutes.map((minute) => ({ p: { hour24: 11, minute }, cap: minute }));
+  assert.deepEqual(e.pickClosingTicks(items, 11, e.closingMinute('miami')).map((x) => x.p.minute), [53]);
+  // EST: 11:54 local = 16:54Z.
+  const ticks = [
+    tick('11:05 AM', utc(2026, 11, 4, 16, 5)),
+    tick('11:21 AM', utc(2026, 11, 4, 16, 21)),
+    tick('11:37 AM', utc(2026, 11, 4, 16, 37)),
+    tick('11:53 AM', utc(2026, 11, 4, 16, 53)),
+  ];
+  const r = e.gate({ cls: closing11, city: 'miami', now: utc(2026, 11, 4, 16, 54), ticks });
+  assert.equal(r.state, 'ready');
+  assert.equal(r.label, '11:53 AM');
+});
+
+test('the :32 tick is never picked', () => {
+  const items = [2, 17, 32, 47].map((minute) => ({ p: { hour24: 11, minute }, cap: minute }));
+  const picked = e.pickClosingTicks(items, 11, 45);
+  assert.ok(picked.every((x) => x.p.minute !== 32));
+  assert.deepEqual(picked.map((x) => x.p.minute), [47]);
+  assert.deepEqual(e.pickClosingTicks(items.filter((x) => x.p.minute <= 32), 11, 45), []);
+  const r = e.gate({
+    cls: closing11,
+    city: 'san francisco',
+    now: utc(2026, 11, 4, 19, 48),
+    ticks: [tick('11:02 AM', utc(2026, 11, 4, 19, 2)), tick('11:17 AM', utc(2026, 11, 4, 19, 17)), tick('11:32 AM', utc(2026, 11, 4, 19, 32)), tick('11:47 AM', utc(2026, 11, 4, 19, 47))],
+  });
+  assert.equal(r.state, 'ready');
+  assert.equal(r.label, '11:47 AM');
+});
+
+test('two ticks at :47 and :48 pick :48', () => {
+  const items = [
+    { p: { hour24: 11, minute: 47 }, cap: 1 },
+    { p: { hour24: 11, minute: 48 }, cap: 2 },
+  ];
+  const picked = e.pickClosingTicks(items, 11, 45);
+  assert.deepEqual(picked.map((x) => x.p.minute), [48]);
+  const r = e.gate({
+    cls: closing11,
+    city: 'san francisco',
+    now: utc(2026, 11, 4, 19, 49),
+    ticks: [tick('11:47 AM', utc(2026, 11, 4, 19, 47)), tick('11:48 AM', utc(2026, 11, 4, 19, 48))],
+  });
+  assert.equal(r.state, 'ready');
+  assert.equal(r.label, '11:48 AM');
+});
+
+test('Hong Kong closingMinute is 50 and the other 18 cities are unchanged', () => {
+  assert.equal(e.closingMinute('hong kong'), 50);
+  const unchanged = {
+    'san francisco': 45, seattle: 45, 'los angeles': 45, nyc: 45, atlanta: 45, miami: 45,
+    beijing: 30, shanghai: 30, tokyo: 30, seoul: 30, singapore: 30, madrid: 30, paris: 30,
+    shenzhen: 0,
+    london: 50, munich: 50, milan: 50,
+    amsterdam: 55,
+  };
+  assert.equal(Object.keys(unchanged).length, 18);
+  for (const [city, minute] of Object.entries(unchanged)) {
+    assert.equal(e.closingMinute(city), minute, city);
+  }
+});
+
+test('no tick at or after the minimum leaves the gate missing', () => {
+  assert.deepEqual(e.pickClosingTicks([{ p: { hour24: 11, minute: 32 }, cap: 1 }], 11, 45), []);
+  const r = e.gate({
+    cls: closing11,
+    city: 'san francisco',
+    now: utc(2026, 11, 4, 19, 46),
+    ticks: [tick('11:02 AM', utc(2026, 11, 4, 19, 2)), tick('11:17 AM', utc(2026, 11, 4, 19, 17)), tick('11:32 AM', utc(2026, 11, 4, 19, 32))],
+  });
+  assert.equal(r.state, 'missing');
 });
 
 test('Shenzhen has one 11AM tick and it is the close', () => {

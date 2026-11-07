@@ -75,10 +75,14 @@ for (const [city, sched] of Object.entries(eng.CITY_SCHEDULE)) {
       }
       hit = labels.some((m) => m >= win[0] && m <= win[1]);
     } else {
-      hit = minutes.has(closeMin);
+      // Same rule as gate(): last tick in this hour at or after the nominal close.
+      const items = [...minutes.entries()].map(([minute, cap]) => ({ p: { hour24, minute }, cap }));
+      const picked = eng.pickClosingTicks(items, hour24, closeMin);
+      hit = picked.length > 0;
       if (hit) {
-        const lp = eng.localParts(new Date(minutes.get(closeMin)), sched.tz);
-        lag = `  stored ${lp.hour * 60 + lp.minute - (hour24 * 60 + closeMin)} min after its label`;
+        const labelMin = picked[0].p.minute;
+        const lp = eng.localParts(new Date(picked[0].cap), sched.tz);
+        lag = `  stored ${lp.hour * 60 + lp.minute - (hour24 * 60 + labelMin)} min after its label`;
       } else {
         // Suggest what the schedule should say: the largest minute that was really seen in this hour.
         lag = `  (last minute seen is :${String(observed[observed.length - 1]).padStart(2, "0")}, set the schedule to match)`;
