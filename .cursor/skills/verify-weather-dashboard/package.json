@@ -1,0 +1,10 @@
+{
+  "name": "verify-weather-dashboard",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mongodb": "^6.9.0",
+    "mongodb-memory-server": "^10.2.0",
+    "playwright": "^1.55.0"
+  }
+}

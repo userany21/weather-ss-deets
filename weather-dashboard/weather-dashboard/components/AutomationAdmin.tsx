@@ -2,15 +2,12 @@
 
 import { useCallback, useState } from "react";
 import useSWR from "swr";
+import type { Fill, RuleStats } from "../lib/automation/fillTypes";
+import { usd } from "../lib/automation/format";
+import { BuyHistory } from "./automation/BuyHistory";
 
-interface RuleStats {
-  fills: number;
-  wins: number;
-  losses: number;
-  open: number;
-  pnl: number;
-  spent: number;
-}
+const FILLS_LIMIT = 500;
+
 interface Rule {
   id: string;
   label: string;
@@ -22,20 +19,6 @@ interface Rule {
   stake_usd: number;
   max_price_cents: number | null;
   stats: RuleStats;
-}
-interface Fill {
-  id: string;
-  rule_label: string;
-  city: string;
-  local_date: string;
-  bracket: string;
-  signal_price_cents: number | null;
-  avg_price: number;
-  shares: number;
-  spent_usd: number;
-  fired_at: string;
-  won: boolean | null;
-  pnl_usd: number | null;
 }
 interface RulesResp {
   automationEnabled: boolean;
@@ -65,9 +48,6 @@ async function fetcher<T>(url: string): Promise<T> {
   if (!res.ok || !json) throw new ApiError(res.status, json?.error ?? `Request failed (${res.status})`);
   return json;
 }
-
-const usd = (n: number) => `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
-const cents = (n: number) => `${(n * 100).toFixed(1)}¢`;
 
 function Switch(props: { on: boolean; disabled?: boolean; label: string; onChange: (next: boolean) => void }) {
   return (
@@ -124,7 +104,7 @@ function NumField(props: {
 
 export default function AutomationAdmin() {
   const rules = useSWR<RulesResp, ApiError>("/api/automation/rules", fetcher, { refreshInterval: 15000 });
-  const fills = useSWR<FillsResp, ApiError>("/api/automation/fills?limit=200", fetcher, { refreshInterval: 30000 });
+  const fills = useSWR<FillsResp, ApiError>(`/api/automation/fills?limit=${FILLS_LIMIT}`, fetcher, { refreshInterval: 30000 });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -170,7 +150,6 @@ export default function AutomationAdmin() {
   );
 
   const authProblem = [rules.error, fills.error].find((e) => e && (e.status === 0 || e.status === 401 || e.status === 403 || e.status === 503));
-  const summary = fills.data?.summary;
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-6 px-4 py-8 text-[#d5def0]">
@@ -271,61 +250,7 @@ export default function AutomationAdmin() {
         )}
       </section>
 
-      <section className="overflow-x-auto rounded-xl border border-white/5 bg-[#0f1729] p-5">
-        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-[15px] font-semibold text-white">Buy history</h2>
-          {summary ? (
-            <p className="text-sm text-[#8e9bb8]">
-              {summary.fills} buys · {usd(summary.spent)} spent · {summary.wins} won, {summary.losses} lost, {summary.open} open ·{" "}
-              <span className={summary.pnl >= 0 ? "text-emerald-300" : "text-rose-300"}>{usd(summary.pnl)}</span> settled P&amp;L
-            </p>
-          ) : null}
-        </div>
-        {fills.data && fills.data.fills.length === 0 ? (
-          <p className="text-sm text-[#8e9bb8]">No buys yet. Only orders that filled are recorded here.</p>
-        ) : (
-          <table className="w-full min-w-[820px] border-collapse text-sm">
-            <thead>
-              <tr className="text-left text-xs text-[#6f7c99]">
-                <th className="pb-2 font-normal">Bought</th>
-                <th className="pb-2 font-normal">City</th>
-                <th className="pb-2 font-normal">Day</th>
-                <th className="pb-2 font-normal">Bracket</th>
-                <th className="pb-2 font-normal">Row</th>
-                <th className="pb-2 text-right font-normal">Signal</th>
-                <th className="pb-2 text-right font-normal">Fill</th>
-                <th className="pb-2 text-right font-normal">Spent</th>
-                <th className="pb-2 text-right font-normal">Result</th>
-                <th className="pb-2 text-right font-normal">P&amp;L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fills.data?.fills.map((f) => (
-                <tr key={f.id} className="border-t border-white/5">
-                  <td className="py-2 pr-3 text-[#a9b6d0]">{new Date(f.fired_at).toLocaleString()}</td>
-                  <td className="py-2 pr-3 capitalize text-white">{f.city}</td>
-                  <td className="py-2 pr-3 tabular-nums text-[#a9b6d0]">{f.local_date}</td>
-                  <td className="py-2 pr-3 text-white">{f.bracket}</td>
-                  <td className="py-2 pr-3 text-[#a9b6d0]">{f.rule_label}</td>
-                  <td className="py-2 text-right tabular-nums text-[#a9b6d0]">{f.signal_price_cents === null ? "n/a" : `${f.signal_price_cents.toFixed(1)}¢`}</td>
-                  <td className="py-2 text-right tabular-nums">{cents(f.avg_price)}</td>
-                  <td className="py-2 text-right tabular-nums">{usd(f.spent_usd)}</td>
-                  <td className="py-2 text-right">
-                    {f.won === null ? <span className="text-[#8e9bb8]">Open</span> : f.won ? <span className="text-emerald-300">Won</span> : <span className="text-rose-300">Lost</span>}
-                  </td>
-                  <td className={`py-2 text-right tabular-nums ${f.pnl_usd !== null && f.pnl_usd > 0 ? "text-emerald-300" : f.pnl_usd !== null && f.pnl_usd < 0 ? "text-rose-300" : ""}`}>
-                    {f.pnl_usd === null ? "" : usd(f.pnl_usd)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <p className="mt-3 text-xs text-[#6f7c99]">
-          Signal is the price on the closing tick. Fill is what PolyBot actually paid. The Stats page edge was measured from the
-          first 12 PM tick, so compare real P&amp;L here, not that number.
-        </p>
-      </section>
+      <BuyHistory fills={fills.data?.fills} summary={fills.data?.summary} limit={FILLS_LIMIT} />
     </main>
   );
 }
