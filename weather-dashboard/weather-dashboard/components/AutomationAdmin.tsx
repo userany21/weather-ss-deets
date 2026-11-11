@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 import type { Fill, RuleStats } from "../lib/automation/fillTypes";
 import { usd } from "../lib/automation/format";
@@ -28,6 +28,23 @@ interface FillsResp {
   fills: Fill[];
   summary: RuleStats;
 }
+interface BacktestStats {
+  count: number;
+  raw_count: number;
+  resolved: number;
+  win_rate: number | null;
+  avg_edge_cents: number | null;
+}
+interface BacktestResp {
+  as_of: number | null;
+  failed: number;
+  backtests: Record<string, BacktestStats | null>;
+}
+type SortKey = "edge" | "win" | "count" | "buys" | "pnl" | "pnlPerBuy";
+interface SortState {
+  key: SortKey;
+  dir: "asc" | "desc";
+}
 
 class ApiError extends Error {
   status: number;
@@ -47,6 +64,44 @@ async function fetcher<T>(url: string): Promise<T> {
   const json = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!res.ok || !json) throw new ApiError(res.status, json?.error ?? `Request failed (${res.status})`);
   return json;
+}
+
+function fmtEdge(n: number | null): string {
+  if (n == null) return "—";
+  return `${n > 0 ? "+" : ""}${n.toFixed(1)}¢`;
+}
+
+function fmtPct(n: number | null): string {
+  if (n == null) return "—";
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+function ChevronDown({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+/** Sort indicator. Same marks as the Stats page table. */
+function SortArrow({ col, sort }: { col: SortKey; sort: SortState | null }) {
+  if (sort?.key !== col) return <span className="ml-1 text-[10px] text-[#5f6c86]">⇅</span>;
+  return <ChevronDown className={`ml-1 inline h-3 w-3 align-middle ${sort.dir === "asc" ? "rotate-180" : ""}`} />;
+}
+
+function ariaSort(sort: SortState | null, key: SortKey): "ascending" | "descending" | "none" {
+  if (sort?.key !== key) return "none";
+  return sort.dir === "asc" ? "ascending" : "descending";
 }
 
 function Switch(props: { on: boolean; disabled?: boolean; label: string; onChange: (next: boolean) => void }) {
@@ -102,11 +157,108 @@ function NumField(props: {
   );
 }
 
+function BacktestCells(props: {
+  stats: BacktestStats | null | undefined;
+  loading: boolean;
+  unavailable: boolean;
+}) {
+  if (props.loading) {
+    return (
+      <>
+        <td className="py-2.5 text-right tabular-nums text-[#6f7c99]">…</td>
+        <td className="py-2.5 text-right tabular-nums text-[#6f7c99]">…</td>
+        <td className="py-2.5 text-right tabular-nums text-[#6f7c99]">…</td>
+      </>
+    );
+  }
+  if (props.unavailable) {
+    const title = "Stats unavailable";
+    return (
+      <>
+        <td className="py-2.5 text-right tabular-nums" title={title}>—</td>
+        <td className="py-2.5 text-right tabular-nums" title={title}>—</td>
+        <td className="py-2.5 text-right tabular-nums" title={title}>—</td>
+      </>
+    );
+  }
+  if (props.stats == null) {
+    const title = "No Stats bucket matches this row key and city list";
+    return (
+      <>
+        <td className="py-2.5 text-right tabular-nums text-[#6f7c99]" title={title}>n/a</td>
+        <td className="py-2.5 text-right tabular-nums text-[#6f7c99]" title={title}>n/a</td>
+        <td className="py-2.5 text-right tabular-nums text-[#6f7c99]" title={title}>n/a</td>
+      </>
+    );
+  }
+  const edge = props.stats.avg_edge_cents;
+  const edgePositive = edge != null && edge > 0;
+  const edgeNegative = edge != null && edge < 0;
+  return (
+    <>
+      <td className="py-2.5 text-right tabular-nums" title={`${props.stats.raw_count} raw, ${props.stats.resolved} resolved`}>
+        {props.stats.count.toLocaleString()}
+      </td>
+      <td className="py-2.5 text-right tabular-nums text-[#38b6ff]">{fmtPct(props.stats.win_rate)}</td>
+      <td
+        className="py-2.5 text-right font-medium tabular-nums"
+        style={{ color: edgePositive ? "#2ee08a" : edgeNegative ? "#ff5566" : "#8a97b1" }}
+      >
+        {fmtEdge(edge)}
+      </td>
+    </>
+  );
+}
+
 export default function AutomationAdmin() {
   const rules = useSWR<RulesResp, ApiError>("/api/automation/rules", fetcher, { refreshInterval: 15000 });
   const fills = useSWR<FillsResp, ApiError>(`/api/automation/fills?limit=${FILLS_LIMIT}`, fetcher, { refreshInterval: 30000 });
+  const backtest = useSWR<BacktestResp, ApiError>("/api/automation/rules/backtest", fetcher, {
+    refreshInterval: 60000,
+    revalidateOnFocus: false,
+  });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortState | null>(null);
+  const backtests = backtest.data?.backtests ?? {};
+
+  function sortValue(rule: Rule, key: SortKey): number | null {
+    const bt = backtests[rule.id];
+    const settled = rule.stats.wins + rule.stats.losses;
+    switch (key) {
+      case "edge":
+        return bt?.avg_edge_cents ?? null;
+      case "win":
+        return bt?.win_rate ?? null;
+      case "count":
+        return bt?.count ?? null;
+      case "buys":
+        return rule.stats.fills;
+      case "pnl":
+        return rule.stats.pnl;
+      case "pnlPerBuy":
+        return settled > 0 ? rule.stats.pnl / settled : null;
+    }
+  }
+
+  const sortedRules = useMemo(() => {
+    const list = rules.data?.rules ?? [];
+    if (!sort) return list;
+    const sign = sort.dir === "asc" ? 1 : -1;
+    return [...list].sort((a, b) => {
+      const av = sortValue(a, sort.key);
+      const bv = sortValue(b, sort.key);
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return (av - bv) * sign;
+    });
+  }, [rules.data, backtests, sort]);
+
+  const onSort = (key: SortKey) =>
+    setSort((prev) =>
+      prev?.key === key ? { key, dir: prev.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" },
+    );
 
   const patch = useCallback(
     async (id: string, body: Record<string, unknown>) => {
@@ -186,22 +338,69 @@ export default function AutomationAdmin() {
             Nothing saved yet. Pin a row on the Stats page, then choose “Save for auto-buy”.
           </p>
         ) : (
-          <table className="w-full min-w-[820px] border-collapse text-sm">
+          <table className="w-full min-w-[1120px] border-collapse text-sm">
             <thead>
               <tr className="text-left text-xs text-[#6f7c99]">
                 <th className="pb-2 font-normal">Row</th>
                 <th className="pb-2 font-normal">Cities</th>
                 <th className="pb-2 text-right font-normal">Stake</th>
                 <th className="pb-2 text-right font-normal">Max price (¢)</th>
-                <th className="pb-2 text-right font-normal">Buys</th>
+                <th
+                  className="cursor-pointer whitespace-nowrap pb-2 text-right font-normal hover:text-white"
+                  onClick={() => onSort("buys")}
+                  aria-sort={ariaSort(sort, "buys")}
+                >
+                  Buys
+                  <SortArrow col="buys" sort={sort} />
+                </th>
                 <th className="pb-2 text-right font-normal">Won / lost</th>
-                <th className="pb-2 text-right font-normal">P&amp;L</th>
+                <th
+                  className="cursor-pointer whitespace-nowrap pb-2 text-right font-normal hover:text-white"
+                  onClick={() => onSort("pnl")}
+                  aria-sort={ariaSort(sort, "pnl")}
+                >
+                  P&amp;L
+                  <SortArrow col="pnl" sort={sort} />
+                </th>
+                <th
+                  className="cursor-pointer whitespace-nowrap pb-2 text-right font-normal hover:text-white"
+                  onClick={() => onSort("pnlPerBuy")}
+                  aria-sort={ariaSort(sort, "pnlPerBuy")}
+                >
+                  $ / buy
+                  <SortArrow col="pnlPerBuy" sort={sort} />
+                </th>
+                <th
+                  className="cursor-pointer whitespace-nowrap pb-2 text-right font-normal hover:text-white"
+                  onClick={() => onSort("count")}
+                  aria-sort={ariaSort(sort, "count")}
+                >
+                  Stats n
+                  <SortArrow col="count" sort={sort} />
+                </th>
+                <th
+                  className="cursor-pointer whitespace-nowrap pb-2 text-right font-normal hover:text-white"
+                  onClick={() => onSort("win")}
+                  aria-sort={ariaSort(sort, "win")}
+                >
+                  Stats win
+                  <SortArrow col="win" sort={sort} />
+                </th>
+                <th
+                  className="cursor-pointer whitespace-nowrap pb-2 text-right font-normal hover:text-white"
+                  onClick={() => onSort("edge")}
+                  aria-sort={ariaSort(sort, "edge")}
+                  title="Average edge from the Stats page for this row. Entry price is the first tick in the label hour. Live buys use the last tick of the hour before. Updates about every 60 seconds."
+                >
+                  Stats edge
+                  <SortArrow col="edge" sort={sort} />
+                </th>
                 <th className="pb-2 text-right font-normal">On</th>
                 <th className="pb-2" />
               </tr>
             </thead>
             <tbody>
-              {rules.data?.rules.map((r) => (
+              {sortedRules.map((r) => (
                 <tr key={r.id} className="border-t border-white/5 align-middle">
                   <td className="py-2.5 pr-3">
                     <div className="text-white">{r.label}</div>
@@ -233,6 +432,14 @@ export default function AutomationAdmin() {
                   <td className={`py-2.5 text-right tabular-nums ${r.stats.pnl > 0 ? "text-emerald-300" : r.stats.pnl < 0 ? "text-rose-300" : ""}`}>
                     {usd(r.stats.pnl)}
                   </td>
+                  <td className="py-2.5 text-right tabular-nums">
+                    {r.stats.wins + r.stats.losses > 0 ? usd(r.stats.pnl / (r.stats.wins + r.stats.losses)) : "—"}
+                  </td>
+                  <BacktestCells
+                    stats={backtest.data ? (backtests[r.id] ?? null) : undefined}
+                    loading={backtest.data == null && !backtest.error}
+                    unavailable={Boolean(backtest.error) && backtest.data == null}
+                  />
                   <td className="py-2.5 text-right">
                     <div className="flex justify-end">
                       <Switch on={r.enabled} disabled={busyId === r.id} label={`Auto-buy for ${r.label}`} onChange={(next) => patch(r.id, { enabled: next })} />
@@ -248,6 +455,12 @@ export default function AutomationAdmin() {
             </tbody>
           </table>
         )}
+        {backtest.data ? (
+          <p className="mt-3 text-xs text-[#6f7c99]">
+            Stats updated {backtest.data.as_of != null ? new Date(backtest.data.as_of).toLocaleTimeString() : "—"}
+            {backtest.data.failed > 0 ? ` · ${backtest.data.failed} row(s) not fresh` : ""}
+          </p>
+        ) : null}
       </section>
 
       <BuyHistory fills={fills.data?.fills} summary={fills.data?.summary} limit={FILLS_LIMIT} />

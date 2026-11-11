@@ -1,0 +1,18 @@
+url: http://127.0.0.1:4173/
+- banner:
+  - link "Weather Dashboard":
+    - /url: /
+  - link "Live now":
+    - /url: /live
+  - link "Stats Explorer":
+    - /url: /stats
+  - text: Sun, Nov 8, 2026
+- main:
+  - heading "Regions" [level=1]
+  - link "america 1 cities":
+    - /url: /america
+  - link "asia 1 cities":
+    - /url: /asia
+  - link "europe 1 cities":
+    - /url: /europe
+- alert

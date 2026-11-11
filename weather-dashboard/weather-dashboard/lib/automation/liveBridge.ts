@@ -59,7 +59,7 @@ export interface BridgeMatch {
   methods?: string[];
 }
 
-function parseDimensions(byParam: string): DimensionSpec[] {
+export function parseDimensions(byParam: string): DimensionSpec[] {
   if (!byParam.trim()) return [];
   return byParam
     .split(",")

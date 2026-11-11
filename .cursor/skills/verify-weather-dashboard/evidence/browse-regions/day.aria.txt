@@ -1,0 +1,104 @@
+url: http://127.0.0.1:4173/america/seattle/2026-11-09
+- banner:
+  - link "Weather Dashboard":
+    - /url: /
+  - link "Live now":
+    - /url: /live
+  - link "Stats Explorer":
+    - /url: /stats
+  - text: Sun, Nov 8, 2026
+- main:
+  - navigation:
+    - link "Regions":
+      - /url: /
+    - text: /
+    - link "america":
+      - /url: /america
+    - text: /
+    - link "seattle":
+      - /url: /america/seattle
+  - text: Forecast temp over the day
+  - heading "seattle" [level=1]
+  - text: avg 4.0 ticks/day (3d)
+  - button "Updating live 2026-11-09": 2026-11-09
+  - button "Compare"
+  - img: 9:00 AM 10:00 AM 11:00 AM 12:00 PM 61 61.75 62.5 63.25 64
+  - text: Linear (weighted avg) Reciprocal (weighted avg)
+  - switch "Full day"
+  - table:
+    - rowgroup:
+      - row "bracket rec linear window linear avg bracket price L rec avg bracket price R ticks":
+        - columnheader "bracket"
+        - columnheader "rec"
+        - columnheader "linear"
+        - columnheader "window"
+        - columnheader "linear avg"
+        - columnheader "bracket price L"
+        - columnheader "rec avg"
+        - columnheader "bracket price R"
+        - columnheader "ticks"
+    - rowgroup:
+      - row "62-63°F 0 4 1h 62.400 0.420 — — 2":
+        - cell "62-63°F"
+        - cell "0"
+        - cell "4"
+        - cell "1h"
+        - cell "62.400"
+        - cell "0.420"
+        - cell "—"
+        - cell "—"
+        - cell "2"
+      - row "2h 62.400 0.420 — — 3":
+        - cell
+        - cell
+        - cell
+        - cell "2h"
+        - cell "62.400"
+        - cell "0.420"
+        - cell "—"
+        - cell "—"
+        - cell "3"
+      - row "4h 62.400 0.420 — — 4":
+        - cell
+        - cell
+        - cell
+        - cell "4h"
+        - cell "62.400"
+        - cell "0.420"
+        - cell "—"
+        - cell "—"
+        - cell "4"
+  - heading "Market price over the day" [level=2]
+  - img: 9:00 AM 9:50 AM 10:40 AM 12:00 PM 0 25 50 75 100
+  - list:
+    - listitem:
+      - img
+      - text: Linear
+  - text: No price updates yet.
+  - heading "Local Times" [level=2]
+  - button "Americas" [expanded]
+  - list:
+    - listitem: san francisco 17:24
+    - listitem: seattle 17:24
+    - listitem: los angeles 17:24
+    - listitem: nyc 20:24
+    - listitem: atlanta 20:24
+    - listitem: miami 20:24
+  - button "Europe" [expanded]
+  - list:
+    - listitem: london 01:24
+    - listitem: munich 02:24
+    - listitem: milan 02:24
+    - listitem: amsterdam 02:24
+    - listitem: madrid 02:24
+    - listitem: paris 02:24
+  - button "Asia" [expanded]
+  - list:
+    - listitem: hong kong 09:24
+    - listitem: shenzhen 09:24
+    - listitem: beijing 09:24
+    - listitem: shanghai 09:24
+    - listitem: tokyo 10:24
+    - listitem: seoul 10:24
+    - listitem: singapore 09:24
+- alert
