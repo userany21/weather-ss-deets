@@ -3,6 +3,11 @@ import {
   DIMENSION_REGISTRY_MAP,
   resolveEntry,
   dedupeBets,
+  decisionSlot,
+  liveSource,
+  loadBetRowsForDay,
+  rowsMatching,
+  scoreMatchedRows,
   type DimensionDef,
   type DimensionSpec,
   type FeatureRow,
@@ -39,6 +44,27 @@ const FIRST_TICK_DIMENSION_IDS = new Set(["price", "first_tick_hour"]);
 const ALL_METHODS = ["linear", "reciprocal", "combined"] as const;
 type ScanMethod = (typeof ALL_METHODS)[number];
 const isMethod = (v: string): v is ScanMethod => (ALL_METHODS as readonly string[]).includes(v);
+
+/**
+ * Thrown by the bet_features path when a rule cannot be evaluated right now.
+ * final = true: do not try again today (the rule can never trade).
+ * final = false: try again on the next pass while the closing-tick window is open.
+ */
+export class BridgeSkip extends Error {
+  constructor(
+    public reason: string,
+    public final: boolean,
+  ) {
+    super(reason);
+    Object.setPrototypeOf(this, BridgeSkip.prototype);
+  }
+}
+
+// The table is stale when the builder has not run for this long. Fail closed: buy nothing.
+const MAX_BUILD_AGE_MS = (() => {
+  const v = Number(process.env.AUTOMATION_MAX_BUILD_AGE_MIN);
+  return (Number.isFinite(v) && v > 0 ? v : 10) * 60_000;
+})();
 
 export interface BridgeArgs {
   /** Same text /api/scan takes in `by`, for example "rank_at_hour:4". */
@@ -111,6 +137,11 @@ export async function evaluateRule(args: BridgeArgs): Promise<BridgeMatch[]> {
     return { def, config: spec.config };
   });
 
+  // LIVE_SOURCE=bet_features: read the same table, with the same scoring, as the Stats page.
+  if (liveSource() === "bet_features") {
+    return evaluateFromBets(args, city, dimensions, targetParts, methodsToScan);
+  }
+
   // Same entry rule as the Stats table. An end-of-day filter can never be traded.
   const entry = resolveEntry(dimensions);
   if (entry.kind === "none") throw new Error("not tradeable in live: a filter uses end-of-day data");
@@ -150,4 +181,33 @@ export async function evaluateRule(args: BridgeArgs): Promise<BridgeMatch[]> {
     method: item.method,
     methods,
   }));
+}
+
+/**
+ * bet_features path. The builder (pipeline/build_bet_features.py) writes one row per bracket.
+ * The Stats page scores the same rows with scoreMatchedRows, so a live match is a bet the
+ * script would score. It returns only brackets that have a price at the closing tick.
+ */
+async function evaluateFromBets(
+  args: BridgeArgs,
+  city: string,
+  dimensions: DimensionSpec[],
+  targetParts: string[],
+  methodsToScan: ScanMethod[],
+): Promise<BridgeMatch[]> {
+  const d = decisionSlot(dimensions);
+  // No hour filter: the entry is the first tick and the bracket cap needs the whole day. Not tradeable.
+  if (d.kind !== "slot") throw new BridgeSkip("rule_not_tradeable", true);
+  const slot = d.slot;
+
+  const { rows, oldestBuiltAtMs } = await loadBetRowsForDay(city, args.localDate, methodsToScan);
+  if (rows.length === 0 || oldestBuiltAtMs === null) throw new BridgeSkip("builder_no_rows", false);
+  if (Date.now() - oldestBuiltAtMs > MAX_BUILD_AGE_MS) throw new BridgeSkip("builder_stale", false);
+  // The closing tick for this slot must already be in the table.
+  if (!rows.some((r) => r.gate_open?.[slot] === true)) throw new BridgeSkip("builder_slot_not_ready", false);
+
+  const bets = scoreMatchedRows(rowsMatching(rows, dimensions, targetParts), dimensions, {
+    requireResolved: false,
+  });
+  return bets.map(({ row, methods }) => ({ bracket: row.bracket, method: row.method, methods }));
 }

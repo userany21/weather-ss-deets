@@ -1,0 +1,102 @@
+city,local_date,bracket,method,decision_slot,entry_price_cents,won
+munich,2026-09-03,25°C,combined,2,66.00,1
+atlanta,2026-09-05,96-97°F,combined,2,56.00,1
+munich,2026-09-08,32°C,combined,2,69.00,1
+tokyo,2026-09-10,22°C,combined,2,69.00,1
+amsterdam,2026-09-10,19°C,combined,2,59.00,0
+beijing,2026-09-11,32°C,combined,2,50.00,1
+madrid,2026-09-11,31°C,combined,2,74.00,0
+san francisco,2026-09-11,70-71°F,combined,2,51.00,0
+amsterdam,2026-09-12,21°C,combined,2,65.00,0
+nyc,2026-09-12,78-79°F,combined,2,61.00,1
+shanghai,2026-09-15,28°C,combined,2,51.00,1
+seoul,2026-09-16,27°C,combined,2,39.00,1
+nyc,2026-09-18,80-81°F,combined,2,38.00,1
+atlanta,2026-09-18,94-95°F,combined,2,68.00,0
+london,2026-09-20,20°C,combined,2,59.00,1
+seattle,2026-09-20,70-71°F,combined,2,52.00,1
+shanghai,2026-09-21,29°C,combined,2,58.00,1
+amsterdam,2026-09-22,20°C,combined,2,67.00,0
+nyc,2026-09-22,66-67°F,combined,2,51.00,0
+los angeles,2026-09-22,76-77°F,combined,2,70.00,1
+beijing,2026-09-24,25°C,combined,2,94.00,1
+paris,2026-09-24,24°C,combined,2,55.00,1
+munich,2026-09-25,19°C,combined,2,73.00,1
+los angeles,2026-09-25,76-77°F,combined,2,61.00,1
+milan,2026-09-27,25°C,combined,2,67.00,1
+seattle,2026-09-27,64-65°F,combined,2,63.00,1
+london,2026-09-28,19°C,combined,2,44.00,1
+seoul,2026-10-01,21°C,combined,2,56.00,1
+amsterdam,2026-10-04,20°C,combined,2,59.00,1
+milan,2026-10-04,24°C,combined,2,60.00,0
+amsterdam,2026-10-05,21°C,combined,2,67.00,0
+beijing,2026-10-06,26°C,combined,2,62.00,0
+shanghai,2026-10-06,24°C,combined,2,78.00,1
+paris,2026-10-06,25°C,combined,2,62.00,1
+munich,2026-10-07,24°C,combined,2,68.00,1
+milan,2026-10-08,20°C,combined,2,60.00,1
+tokyo,2026-10-09,24°C,combined,2,62.00,1
+miami,2026-10-09,88-89°F,combined,2,51.00,1
+los angeles,2026-10-09,76-77°F,combined,2,62.00,1
+amsterdam,2026-10-10,15°C,combined,2,65.00,0
+munich,2026-10-10,13°C,combined,2,50.00,1
+london,2026-10-10,16°C,combined,2,63.00,1
+shanghai,2026-10-11,26°C,combined,2,64.00,1
+tokyo,2026-10-12,25°C,combined,2,63.00,1
+london,2026-10-12,18°C,combined,2,49.00,1
+tokyo,2026-10-14,26°C,combined,2,50.00,1
+beijing,2026-10-14,21°C,combined,2,50.00,1
+milan,2026-10-14,21°C,combined,2,60.00,1
+shanghai,2026-10-15,24°C,combined,2,55.00,1
+paris,2026-10-16,21°C,combined,2,60.00,1
+shanghai,2026-10-17,28°C,combined,2,53.00,1
+milan,2026-10-17,21°C,combined,2,64.00,1
+beijing,2026-10-18,19°C,combined,2,60.00,1
+seattle,2026-10-18,58-59°F,combined,2,54.00,1
+miami,2026-10-20,84-85°F,combined,2,56.00,1
+munich,2026-10-22,13°C,combined,2,64.00,1
+madrid,2026-10-22,19°C,combined,2,35.00,0
+nyc,2026-10-22,66-67°F,combined,2,67.00,1
+san francisco,2026-10-23,66-67°F,combined,2,55.00,0
+nyc,2026-10-24,62-63°F,combined,2,66.00,1
+atlanta,2026-10-24,70-71°F,combined,2,59.00,0
+san francisco,2026-10-24,70-71°F,combined,2,60.00,0
+london,2026-10-25,14°C,combined,2,81.00,1
+los angeles,2026-10-25,76-77°F,combined,2,66.00,1
+hong kong,2026-10-26,30°C,combined,2,62.00,1
+shanghai,2026-10-26,24°C,combined,2,65.00,1
+san francisco,2026-10-26,66-67°F,combined,2,69.00,0
+munich,2026-10-27,16°C,combined,2,53.00,1
+san francisco,2026-10-27,64-65°F,combined,2,68.00,1
+los angeles,2026-10-27,74-75°F,combined,2,67.00,1
+shanghai,2026-10-28,21°C,combined,2,75.00,1
+amsterdam,2026-10-28,15°C,combined,2,69.00,1
+san francisco,2026-10-28,68-69°F,combined,2,57.00,1
+milan,2026-10-30,17°C,combined,2,52.00,0
+shanghai,2026-10-30,23°C,combined,2,52.00,0
+miami,2026-10-30,86-87°F,combined,2,74.00,1
+seoul,2026-10-31,17°C,combined,2,97.00,1
+shanghai,2026-10-31,23°C,combined,2,34.00,1
+singapore,2026-10-31,33°C,combined,2,57.00,1
+milan,2026-10-31,17°C,combined,2,43.00,1
+paris,2026-10-31,15°C,combined,2,54.00,1
+singapore,2026-11-01,32°C,combined,2,45.00,1
+milan,2026-11-01,13°C,combined,2,33.00,0
+london,2026-11-01,11°C,combined,2,50.00,1
+nyc,2026-11-01,60-61°F,combined,2,71.00,1
+miami,2026-11-01,80-81°F,combined,2,89.00,1
+los angeles,2026-11-01,70-71°F,combined,2,60.00,1
+tokyo,2026-11-02,19°C,combined,2,83.00,1
+shanghai,2026-11-02,21°C,combined,2,64.00,1
+london,2026-11-02,12°C,combined,2,63.00,0
+nyc,2026-11-02,66-67°F,combined,2,72.00,1
+tokyo,2026-11-03,19°C,combined,2,65.00,1
+nyc,2026-11-03,68-69°F,combined,2,69.00,0
+san francisco,2026-11-03,64-65°F,combined,2,56.00,1
+munich,2026-11-04,7°C,combined,2,56.00,1
+amsterdam,2026-11-04,10°C,combined,2,49.00,1
+london,2026-11-05,10°C,combined,2,44.00,1
+miami,2026-11-05,86-87°F,combined,2,59.00,0
+los angeles,2026-11-05,78-79°F,combined,2,38.00,1
+los angeles,2026-11-07,84-85°F,combined,2,55.00,1
+los angeles,2026-11-08,86-87°F,combined,2,51.00,0

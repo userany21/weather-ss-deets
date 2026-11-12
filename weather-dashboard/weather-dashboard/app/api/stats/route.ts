@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   aggregate,
   serializeRegistry,
+  statsSource,
   DIMENSION_REGISTRY_MAP,
   type DimensionSpec,
   type StatsFilters,
@@ -138,6 +139,7 @@ export async function GET(req: NextRequest) {
       total_rows: totalRows,
       dimension_registry: serializeRegistry(),
       computed_at: computedAt?.toISOString() ?? null,
+      source: statsSource(),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Internal error";

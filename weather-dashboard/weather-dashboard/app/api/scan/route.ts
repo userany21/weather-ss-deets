@@ -39,10 +39,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLiveFeatures } from "@/lib/live-features";
 import {
   DIMENSION_REGISTRY_MAP,
+  HOUR_LABELS,
   resolveEntry,
   entryFor,
   entryLabel,
   dedupeBets,
+  decisionSlot,
+  liveSource,
+  loadBetRowsForDay,
+  rowsMatching,
+  scoreMatchedRows,
   type DimensionSpec,
   type FeatureRow,
 } from "@/lib/stats-aggregator";
@@ -207,6 +213,18 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // LIVE_SOURCE=bet_features: same table and same scoring as the Stats page and the bot.
+  if (liveSource() === "bet_features") {
+    return scanFromBets({
+      dimensions,
+      targetParts,
+      criteriaKey,
+      citiesToScan,
+      methodsToScan,
+      dedupe: sp.get("dedupe") !== "0",
+    });
+  }
+
   // Entry rule — the SAME function the Stats table uses, so scan and backtest
   // cannot drift. Entry hour = latest hour used by any filter.
   const entry = resolveEntry(dimensions);
@@ -338,5 +356,155 @@ export async function GET(req: NextRequest) {
     cities_scanned: citiesToScan,
     match_count: uniqueMatches.length,
     matches: uniqueMatches,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// bet_features source (LIVE_SOURCE=bet_features)
+// ---------------------------------------------------------------------------
+// Same table, same scoring and same stale rule as lib/automation/liveBridge.ts.
+// A match shows only after the closing tick of the decision hour is in the table.
+
+const MAX_BUILD_AGE_MS = (() => {
+  const v = Number(process.env.AUTOMATION_MAX_BUILD_AGE_MIN);
+  return (Number.isFinite(v) && v > 0 ? v : 10) * 60_000;
+})();
+
+type BetDay = { rows: FeatureRow[]; oldestBuiltAtMs: number | null };
+
+function localDateIn(tz: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+async function scanFromBets(args: {
+  dimensions: DimensionSpec[];
+  targetParts: string[];
+  criteriaKey: string;
+  citiesToScan: string[];
+  methodsToScan: ScanMethod[];
+  dedupe: boolean;
+}) {
+  const { dimensions, targetParts, criteriaKey, citiesToScan, methodsToScan, dedupe } = args;
+
+  const d = decisionSlot(dimensions);
+  if (d.kind === "none") {
+    return NextResponse.json(
+      {
+        error:
+          "not tradeable in live: a filter uses end-of-day data (Final Rank / Final Tick Count)",
+      },
+      { status: 400 }
+    );
+  }
+  if (d.kind === "first_tick") {
+    return NextResponse.json(
+      {
+        error:
+          "not tradeable in live: the rule has no hour filter, so the bot has no closing tick to buy at",
+      },
+      { status: 400 }
+    );
+  }
+  const slot = d.slot;
+  const prevSlot = Math.max(0, slot - 2); // 2-hour lookback (matches rank_trend)
+  const entryText = `${HOUR_LABELS[slot] ?? `H${slot}`} close`;
+
+  let loaded: BetDay[];
+  try {
+    loaded = await Promise.all(
+      citiesToScan.map((city) =>
+        loadBetRowsForDay(
+          city,
+          localDateIn(getCityConfig(city)?.timezone ?? "UTC"),
+          methodsToScan
+        )
+      )
+    );
+  } catch (err) {
+    return NextResponse.json(
+      {
+        error: `Failed to fetch live data: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      { status: 500 }
+    );
+  }
+
+  // Oldest computed_at of all rows that were read. A row with no usable computed_at counts as stale.
+  let oldest: number | null = null;
+  let unknownAge = false;
+  for (const l of loaded) {
+    if (l.rows.length === 0) continue;
+    if (l.oldestBuiltAtMs === null) unknownAge = true;
+    else if (oldest === null || l.oldestBuiltAtMs < oldest) oldest = l.oldestBuiltAtMs;
+  }
+  const builderStale =
+    unknownAge || (oldest !== null && Date.now() - oldest > MAX_BUILD_AGE_MS);
+
+  const allRows = loaded.flatMap((l) => l.rows);
+  const bets = scoreMatchedRows(
+    rowsMatching(allRows, dimensions, targetParts),
+    dimensions,
+    { requireResolved: false, dedupe }
+  );
+
+  const matches: ScanMatch[] = bets.map(({ row, price, methods }) => {
+    const tz = getCityConfig(row.city)?.timezone ?? "UTC";
+    const localTime = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric",
+      minute: "numeric",
+      hour12: false,
+    })
+      .format(new Date())
+      .replace(/^24:/, "00:");
+    const tickCount = row.tick_count_through_hour[slot] ?? 0;
+    const leadMarginRaw = row.lead_margin_through_hour?.[slot] ?? null;
+    return {
+      city: row.city,
+      bracket: row.bracket,
+      local_date: row.local_date,
+      local_time: localTime,
+      method: row.method as ScanMethod,
+      methods: methods as ScanMethod[],
+      entry_price_cents: price,
+      entry_label: entryText,
+      tick_count: tickCount,
+      lead_margin_pct:
+        tickCount > 0 && leadMarginRaw !== null
+          ? Math.round(leadMarginRaw * 1000) / 10
+          : null,
+      rank_now: row.rank_through_hour[slot] ?? null,
+      rank_prev: row.rank_through_hour[prevSlot] ?? null,
+    };
+  });
+
+  matches.sort(
+    (a, b) => a.city.localeCompare(b.city) || a.bracket.localeCompare(b.bracket)
+  );
+
+  const criteria_label = dimensions
+    .map((spec, i) => {
+      const def = DIMENSION_REGISTRY_MAP.get(spec.id);
+      return def ? def.bucketLabel(targetParts[i], spec.config) : targetParts[i];
+    })
+    .join(" × ");
+
+  return NextResponse.json({
+    scanned_at: new Date().toISOString(),
+    source: "bet_features",
+    criteria_label,
+    criteria_key: criteriaKey,
+    method: methodsToScan.length > 1 ? "all" : methodsToScan[0],
+    methods_scanned: methodsToScan,
+    cities_scanned: citiesToScan,
+    match_count: matches.length,
+    matches,
+    builder_oldest_computed_at: oldest === null ? null : new Date(oldest).toISOString(),
+    builder_stale: builderStale,
   });
 }

@@ -1,0 +1,148 @@
+url: http://127.0.0.1:4173/stats
+- banner:
+  - link "Weather Dashboard":
+    - /url: /
+  - link "Live now":
+    - /url: /live
+  - link "Stats Explorer":
+    - /url: /stats
+  - text: Wed, Nov 11, 2026
+- main:
+  - link "Regions":
+    - /url: /
+  - text: /Stats Explorer
+  - heading "Stats Explorer" [level=1]
+  - paragraph: Analyze historical and forecasted market data across regions, cities, and timeframes.
+  - text: Dimensions City
+  - combobox "Change City":
+    - option "City" [selected]
+    - option "First-Tick Price"
+    - option "Leader before Hour-N"
+    - option "Method"
+    - option "Final Rank"
+    - option "First-Tick Hour"
+    - option "Day of Week"
+    - option "Region"
+    - option "Rank before Hour-N"
+    - option "Price at Hour-N"
+    - option "Lead Margin before Hour-N"
+    - option "Rank Trend before Hour-N"
+    - option "Final Tick Count"
+    - option "Remove"
+  - text: Add dimension
+  - combobox "Add dimension":
+    - option "Add dimension" [disabled] [selected]
+    - option "First-Tick Price"
+    - option "Leader before Hour-N"
+    - option "Method"
+    - option "Final Rank"
+    - option "First-Tick Hour"
+    - option "Day of Week"
+    - option "Region"
+    - option "Rank before Hour-N"
+    - option "Price at Hour-N"
+    - option "Lead Margin before Hour-N"
+    - option "Rank Trend before Hour-N"
+    - option "Final Tick Count"
+  - text: Quick ranges
+  - button "+ First-Tick Price"
+  - button "+ Leader before Hour-N"
+  - button "City" [disabled]
+  - button "+ Method"
+  - button "+ Final Rank"
+  - button "+ First-Tick Hour"
+  - button "+ Day of Week"
+  - button "Region"
+  - button "+ Rank before Hour-N"
+  - button "+ Price at Hour-N"
+  - button "+ Lead Margin before Hour-N"
+  - button "+ Rank Trend before Hour-N"
+  - button "+ Final Tick Count"
+  - text: Filters Method
+  - combobox:
+    - option "All methods"
+    - option "Combined" [selected]
+    - option "Linear"
+    - option "Reciprocal"
+  - text: Date range
+  - textbox "From date"
+  - textbox "To date"
+  - text: Min sample / bucket
+  - spinbutton: "10"
+  - checkbox "Resolved markets only" [checked]
+  - text: Resolved markets only
+  - checkbox "Count each bet once" [checked]
+  - text: Count each bet once Cities
+  - textbox "Search cities":
+    - /placeholder: Search cities...
+  - button "Select all asia cities"
+  - button "asia" [expanded]
+  - checkbox "hong kong"
+  - text: hong kong
+  - checkbox "shenzhen"
+  - text: shenzhen
+  - checkbox "beijing"
+  - text: beijing
+  - checkbox "shanghai"
+  - text: shanghai
+  - checkbox "tokyo"
+  - text: tokyo
+  - checkbox "seoul"
+  - text: seoul
+  - checkbox "singapore"
+  - text: singapore
+  - button "Select all europe cities"
+  - button "europe"
+  - button "Select all america cities"
+  - button "america"
+  - heading "Market price over the day" [level=2]
+  - text: 1 bucket · 10 rows · feature table 11/11/2026
+  - button "Avg Edge"
+  - button "Win Rate"
+  - img: Seattle 0¢ 15¢ 30¢ 45¢ 60¢
+  - heading "Market price details" [level=2]
+  - text: Edge = outcome − the first-tick price
+  - table:
+    - rowgroup:
+      - row "Bucket Count⇅ Resolved⇅ Avg Edge Win Rate⇅":
+        - columnheader "Bucket"
+        - columnheader "Count⇅"
+        - columnheader "Resolved⇅"
+        - columnheader "Avg Edge"
+        - columnheader "Win Rate⇅"
+    - rowgroup:
+      - row "seattle → 10 10 +55.0¢ 100.0% Expand rows":
+        - cell "seattle →"
+        - cell "10"
+        - cell "10"
+        - cell "+55.0¢"
+        - cell "100.0%"
+        - cell "Expand rows":
+          - button "Expand rows"
+  - heading "Local Times" [level=2]
+  - button "Americas" [expanded]
+  - list:
+    - listitem: san francisco 18:18
+    - listitem: seattle 18:18
+    - listitem: los angeles 18:18
+    - listitem: nyc 21:18
+    - listitem: atlanta 21:18
+    - listitem: miami 21:18
+  - button "Europe" [expanded]
+  - list:
+    - listitem: london 02:18
+    - listitem: munich 03:18
+    - listitem: milan 03:18
+    - listitem: amsterdam 03:18
+    - listitem: madrid 03:18
+    - listitem: paris 03:18
+  - button "Asia" [expanded]
+  - list:
+    - listitem: hong kong 10:18
+    - listitem: shenzhen 10:18
+    - listitem: beijing 10:18
+    - listitem: shanghai 10:18
+    - listitem: tokyo 11:18
+    - listitem: seoul 11:18
+    - listitem: singapore 10:18
+- alert

@@ -37,6 +37,12 @@ export interface FeatureRow {
   won: boolean | null;
   edge_cents: number | null;
   computed_at: Date;
+  /** bet_features only. Price at each hour's closing tick (null = this bracket had no priced tick there). */
+  close_price_cents?: (number | null)[];
+  /** bet_features only. true when the worker would have a ready closing tick for that hour. */
+  gate_open?: (boolean | null)[];
+  /** bet_features only. */
+  first_tick_gate_open?: boolean;
 }
 
 export interface DimensionConfigSchema {
@@ -92,6 +98,11 @@ export interface BucketResult {
   resolved: number;
   win_rate: number | null;
   avg_edge_cents: number | null;
+  /** bet_features source only: city-day clustered statistics, same formula as combo_search_fast.py. */
+  city_days?: number;
+  se_cents?: number | null;
+  t?: number | null;
+  edge_lower_cents?: number | null;
 }
 
 /** One raw `stats_features` doc, flattened for the drill-down sub-table. */
@@ -123,7 +134,7 @@ export interface DrillRow {
 
 const cityRegionMap = new Map(CITIES.map((c) => [c.city, c.region as string]));
 
-const HOUR_LABELS = ["8AM", "9AM", "10AM", "11AM", "12PM", "1PM", "2PM", "3PM", "4PM", "5PM"];
+export const HOUR_LABELS = ["8AM", "9AM", "10AM", "11AM", "12PM", "1PM", "2PM", "3PM", "4PM", "5PM"];
 
 function clampHour(n: number): number {
   return Math.min(Math.max(Math.round(n), 0), 9);
@@ -196,7 +207,9 @@ export const DIMENSION_REGISTRY: DimensionDef[] = [
     bucket(row, { n = 1 }) {
       const idx = asof(n); // data through the end of hour N-1
       if (idx < 0 || !hasLegacyArrays(row)) return null;
-      const val = row.is_leader_through_hour[idx] ? "true" : "false";
+      const raw = row.is_leader_through_hour[idx] as boolean | null | undefined;
+      if (raw == null) return null; // slot not built (bet_features: no ready closing tick)
+      const val = raw ? "true" : "false";
       return `leader:${clampHour(n)}:${val}`;
     },
     bucketLabel(key) {
@@ -868,6 +881,7 @@ export async function aggregate(
   totalRows: number;
   computedAt: Date | null;
 }> {
+  if (statsSource() === "bet_features") return aggregateFromBets(filters, dimensions);
   const db = await getDb();
   const col = db.collection<FeatureRow>("stats_features");
 
@@ -1010,6 +1024,10 @@ export async function getRowsForBucket(
     );
   }
 
+  if (statsSource() === "bet_features") {
+    return getRowsForBucketFromBets(filters, dimensions, targetParts);
+  }
+
   const db = await getDb();
   const col = db.collection<FeatureRow>("stats_features");
 
@@ -1124,4 +1142,483 @@ export async function getRowsForBucket(
     .join(" × ");
 
   return { rows: drillRows, bucketLabel };
+}
+
+// ---------------------------------------------------------------------------
+// bet_features source: ONE table for the Stats page, the drill-down and the live scan
+// ---------------------------------------------------------------------------
+//
+// bet_features is built by pipeline/build_bet_features.py. combo_search_fast.py reads
+// the same table. This section scores it with the same rules as that script (R1 to R14):
+//   - The decision slot is the highest slot a filter reads. As-of filters (rank, leader,
+//     lead margin, rank trend) read slot N-1. Price at hour N reads slot N.
+//   - Entry price is close_price_cents[decision slot]. It is NOT the first tick of hour N.
+//   - A bet needs gate_open[decision slot] (the worker would have a ready closing tick).
+//   - Count the distinct brackets that match in one city-day. More than 3 drops the whole
+//     city-day. Count BEFORE the gate and price checks.
+//   - One bet per city + date + bracket. Dedupe runs AFTER the cap, gate and price checks.
+//   - First-Tick Hour and First-Tick Price keep only brackets whose first tick is at or
+//     before the decision slot (R7). There is no first-prediction window here.
+// Switches (env): STATS_SOURCE=bet_features for the page, drill-down and backtest.
+//                 LIVE_SOURCE=bet_features for the live scan and the worker.
+
+export const BRACKET_CAP = 3;
+
+export function statsSource(): "stats_features" | "bet_features" {
+  return process.env.STATS_SOURCE === "bet_features" ? "bet_features" : "stats_features";
+}
+
+/** "legacy" rebuilds the day from raw ticks (old way). "bet_features" reads the table. */
+export function liveSource(): "legacy" | "bet_features" {
+  return process.env.LIVE_SOURCE === "bet_features" ? "bet_features" : "legacy";
+}
+
+interface BetFeatureDoc {
+  city: string;
+  local_date: string;
+  bracket: string;
+  method: FeatureRow["method"];
+  first_tick_price_cents: number | null;
+  first_tick_hour: number | null;
+  has_price: boolean;
+  final_tick_count: number | null;
+  final_rank: number | null;
+  resolved: boolean;
+  won: boolean | null;
+  first_tick_gate_open?: boolean;
+  close_price_cents?: (number | null)[];
+  hour_first_price_cents?: (number | null)[];
+  rank?: (number | null)[];
+  is_leader?: (boolean | null)[];
+  lead_margin?: (number | null)[];
+  tick_count?: (number | null)[];
+  gate_open?: (boolean | null)[];
+  computed_at?: string;
+}
+
+function slots<T>(v: (T | null)[] | undefined | null): (T | null)[] {
+  const out: (T | null)[] = new Array(10).fill(null);
+  if (Array.isArray(v)) {
+    for (let i = 0; i < 10 && i < v.length; i++) out[i] = v[i] ?? null;
+  }
+  return out;
+}
+
+/**
+ * Shapes a bet_features doc like a legacy FeatureRow, so the registry bucket() functions
+ * read it with no change. A slot with no ready closing tick stays null, and bucket()
+ * returns null for it.
+ */
+export function betDocToRow(d: BetFeatureDoc): FeatureRow {
+  return {
+    city: d.city,
+    local_date: String(d.local_date),
+    bracket: String(d.bracket),
+    method: d.method,
+    first_tick_price_cents: d.first_tick_price_cents ?? null,
+    first_tick_hour: d.first_tick_hour ?? null,
+    has_price: !!d.has_price,
+    tick_count_through_hour: slots<number>(d.tick_count).map((v) => v ?? 0),
+    rank_through_hour: slots<number>(d.rank),
+    is_leader_through_hour: slots<boolean>(d.is_leader) as unknown as boolean[],
+    price_at_hour: slots<number>(d.hour_first_price_cents),
+    lead_margin_through_hour: slots<number>(d.lead_margin) as unknown as number[],
+    final_tick_count: d.final_tick_count ?? 0,
+    final_rank: d.final_rank ?? null,
+    // Same test as the script: resolved AND won is not null.
+    resolved: !!d.resolved && d.won != null,
+    won: d.won ?? null,
+    edge_cents: null,
+    computed_at: d.computed_at ? new Date(d.computed_at) : new Date(0),
+    close_price_cents: slots<number>(d.close_price_cents),
+    gate_open: slots<boolean>(d.gate_open),
+    first_tick_gate_open: !!d.first_tick_gate_open,
+  };
+}
+
+const ASOF_DIMENSION_IDS = new Set(["leader", "rank_at_hour", "lead_margin", "rank_trend"]);
+
+export type DecisionSlot =
+  | { kind: "slot"; slot: number } // buy at the closing tick of this slot (0 = 8AM ... 9 = 5PM)
+  | { kind: "first_tick" } // no hour filter: entry is the first tick (not bot-tradable)
+  | { kind: "none" }; // an end-of-day filter: no entry exists
+
+/** R5: the highest slot any filter reads. */
+export function decisionSlot(dimensions: DimensionSpec[]): DecisionSlot {
+  let slot = -1;
+  for (const spec of dimensions) {
+    const def = DIMENSION_REGISTRY_MAP.get(spec.id);
+    if (!def?.timing) continue;
+    if (def.timing === "end_of_day") return { kind: "none" };
+    const key = def.configSchema?.key ?? "n";
+    const n = clampHour(spec.config[key] ?? def.configSchema?.default ?? 0);
+    slot = Math.max(slot, ASOF_DIMENSION_IDS.has(spec.id) ? n - 1 : n);
+  }
+  return slot >= 0 ? { kind: "slot", slot } : { kind: "first_tick" };
+}
+
+/** R10: drop every city-day that has more than BRACKET_CAP distinct matched brackets. */
+function dropBroadCityDays(rows: FeatureRow[]): FeatureRow[] {
+  const brackets = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const k = `${r.city}|${r.local_date}`;
+    let s = brackets.get(k);
+    if (!s) {
+      s = new Set<string>();
+      brackets.set(k, s);
+    }
+    s.add(String(r.bracket).trim());
+  }
+  return rows.filter((r) => (brackets.get(`${r.city}|${r.local_date}`)?.size ?? 0) <= BRACKET_CAP);
+}
+
+export interface ScoredBet {
+  row: FeatureRow;
+  price: number | null;
+  edge: number | null;
+  methods: string[];
+  dup_count: number;
+}
+
+function usable(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * R7, R10, R8, R9, R11 and R12 for ONE bucket. `matched` holds the rows whose
+ * dimensions all matched. requireResolved=false is for the live path (no result yet).
+ */
+export function scoreMatchedRows(
+  matched: FeatureRow[],
+  dimensions: DimensionSpec[],
+  opts: { requireResolved: boolean; dedupe?: boolean }
+): ScoredBet[] {
+  const d = decisionSlot(dimensions);
+  const dedupe = opts.dedupe !== false;
+  let rows = matched;
+
+  // R7
+  if (d.kind === "slot" && dimensions.some((x) => FIRST_TICK_DIMENSION_IDS.has(x.id))) {
+    const last = d.slot;
+    rows = rows.filter(
+      (r) => r.first_tick_hour != null && r.first_tick_hour >= 0 && r.first_tick_hour <= last
+    );
+  }
+
+  if (d.kind === "none") {
+    return dedupeBets(rows, (r) => r, dedupe).map(({ item, methods, dup_count }) => ({
+      row: item,
+      price: null,
+      edge: null,
+      methods,
+      dup_count,
+    }));
+  }
+
+  // R10
+  rows = dropBroadCityDays(rows);
+
+  // R9, R6, R8
+  const ok: Array<{ row: FeatureRow; price: number }> = [];
+  for (const r of rows) {
+    if (opts.requireResolved && !(r.resolved && r.won != null)) continue;
+    const price =
+      d.kind === "slot"
+        ? usable(r.close_price_cents?.[d.slot])
+        : r.has_price
+          ? usable(r.first_tick_price_cents)
+          : null;
+    if (price == null) continue;
+    const gate = d.kind === "slot" ? r.gate_open?.[d.slot] === true : r.first_tick_gate_open === true;
+    if (!gate) continue;
+    ok.push({ row: r, price });
+  }
+
+  // R11, R12
+  return dedupeBets(ok, (x) => x.row, dedupe).map(({ item, methods, dup_count }) => ({
+    row: item.row,
+    price: item.price,
+    edge:
+      item.row.resolved && item.row.won != null
+        ? item.row.won
+          ? 100 - item.price
+          : -item.price
+        : null,
+    methods,
+    dup_count,
+  }));
+}
+
+/** Rows whose bucket key matches `keys` on every dimension (same order as `dimensions`). */
+export function rowsMatching(
+  rows: FeatureRow[],
+  dimensions: DimensionSpec[],
+  keys: string[]
+): FeatureRow[] {
+  const defs = dimensions.map((spec) => {
+    const def = DIMENSION_REGISTRY_MAP.get(spec.id);
+    if (!def) throw new Error(`Unknown dimension: "${spec.id}"`);
+    return { def, config: spec.config };
+  });
+  return rows.filter((row) => defs.every(({ def, config }, i) => def.bucket(row, config) === keys[i]));
+}
+
+/** City-day clustered standard error of the mean edge. Same formula as combo_search_fast.py. */
+function clusterStats(bets: ScoredBet[]): { cityDays: number; se: number | null; t: number | null } {
+  const edged = bets.filter((b) => b.edge !== null);
+  const n = edged.length;
+  if (n === 0) return { cityDays: 0, se: null, t: null };
+  let total = 0;
+  for (const b of edged) total += b.edge as number;
+  const mean = total / n;
+  const days = new Map<string, { sum: number; count: number }>();
+  for (const b of edged) {
+    const k = `${b.row.city}|${b.row.local_date}`;
+    const cur = days.get(k);
+    if (cur) {
+      cur.sum += b.edge as number;
+      cur.count += 1;
+    } else {
+      days.set(k, { sum: b.edge as number, count: 1 });
+    }
+  }
+  const g = days.size;
+  if (g < 2) return { cityDays: g, se: null, t: null };
+  let ss = 0;
+  for (const { sum, count } of days.values()) {
+    const resid = sum - mean * count;
+    ss += resid * resid;
+  }
+  const se = Math.sqrt((ss * g) / (g - 1)) / n;
+  return { cityDays: g, se, t: se > 0 ? mean / se : null };
+}
+
+/** Same filters as buildMongoMatch, but resolved is NOT filtered here: R9 runs after the cap. */
+function buildBetMatch(filters: StatsFilters): Record<string, unknown> {
+  const match = buildMongoMatch(filters);
+  delete match.resolved;
+  return match;
+}
+
+async function aggregateFromBets(
+  filters: StatsFilters,
+  dimensions: DimensionSpec[]
+): Promise<{ buckets: BucketResult[]; totalRows: number; computedAt: Date | null }> {
+  const db = await getDb();
+  const col = db.collection<BetFeatureDoc>("bet_features");
+  const docs = (await col.find(buildBetMatch(filters)).toArray()) as unknown as BetFeatureDoc[];
+  const rows = docs.map(betDocToRow);
+  const totalRows = rows.length;
+
+  const latest = (await col.findOne(
+    {},
+    { sort: { computed_at: -1 }, projection: { computed_at: 1 } }
+  )) as unknown as { computed_at?: string } | null;
+  const computedAt = latest?.computed_at ? new Date(latest.computed_at) : null;
+
+  if (dimensions.length === 0 || rows.length === 0) {
+    return { buckets: [], totalRows, computedAt };
+  }
+
+  const dimDefs = dimensions.map((spec) => {
+    const def = DIMENSION_REGISTRY_MAP.get(spec.id);
+    if (!def) throw new Error(`Unknown dimension: "${spec.id}"`);
+    return { def, config: spec.config };
+  });
+
+  const groups = new Map<string, FeatureRow[]>();
+  for (const row of rows) {
+    const parts: string[] = [];
+    let exclude = false;
+    for (const { def, config } of dimDefs) {
+      const b = def.bucket(row, config);
+      if (b === null) {
+        exclude = true;
+        break;
+      }
+      parts.push(b);
+    }
+    if (exclude) continue;
+    const key = parts.join("|");
+    const list = groups.get(key);
+    if (list) list.push(row);
+    else groups.set(key, [row]);
+  }
+
+  const minCount = filters.minCount ?? 0;
+  const dedupe = filters.dedupe !== false;
+  const buckets: BucketResult[] = [];
+  for (const [key, matched] of groups) {
+    const bets = scoreMatchedRows(matched, dimensions, { requireResolved: true, dedupe });
+    if (bets.length < minCount) continue;
+
+    let wins = 0;
+    let resolved = 0;
+    let edgeSum = 0;
+    let edgeCount = 0;
+    for (const b of bets) {
+      if (b.row.resolved) {
+        resolved++;
+        if (b.row.won) wins++;
+      }
+      if (b.edge !== null) {
+        edgeSum += b.edge;
+        edgeCount++;
+      }
+    }
+    const avg = edgeCount > 0 ? edgeSum / edgeCount : null;
+    const cs = clusterStats(bets);
+    const parts = key.split("|");
+    buckets.push({
+      key,
+      label: parts.map((p, i) => dimDefs[i].def.bucketLabel(p, dimDefs[i].config)).join(" × "),
+      count: bets.length,
+      raw_count: bets.reduce((a, b) => a + b.dup_count, 0),
+      resolved,
+      win_rate: resolved > 0 ? wins / resolved : null,
+      avg_edge_cents: avg,
+      city_days: cs.cityDays,
+      se_cents: cs.se,
+      t: cs.t,
+      edge_lower_cents: avg !== null && cs.se !== null ? avg - 2 * cs.se : null,
+    });
+  }
+
+  buckets.sort((a, b) => {
+    if (a.avg_edge_cents !== null && b.avg_edge_cents !== null) {
+      return b.avg_edge_cents - a.avg_edge_cents;
+    }
+    if (a.avg_edge_cents !== null) return -1;
+    if (b.avg_edge_cents !== null) return 1;
+    if (a.win_rate !== null && b.win_rate !== null) return b.win_rate - a.win_rate;
+    return 0;
+  });
+
+  return { buckets, totalRows, computedAt };
+}
+
+async function getRowsForBucketFromBets(
+  filters: StatsFilters,
+  dimensions: DimensionSpec[],
+  targetParts: string[]
+): Promise<{ rows: DrillRow[]; bucketLabel: string }> {
+  const db = await getDb();
+  const col = db.collection<BetFeatureDoc>("bet_features");
+  const docs = (await col.find(buildBetMatch(filters)).toArray()) as unknown as BetFeatureDoc[];
+  const bets = scoreMatchedRows(
+    rowsMatching(docs.map(betDocToRow), dimensions, targetParts),
+    dimensions,
+    { requireResolved: true, dedupe: filters.dedupe !== false }
+  );
+
+  const d = decisionSlot(dimensions);
+  const entryText =
+    d.kind === "slot"
+      ? `${HOUR_LABELS[d.slot] ?? `H${d.slot}`} close`
+      : d.kind === "first_tick"
+        ? "first-tick price"
+        : "none (end-of-day filter)";
+
+  // Winning bracket per (city, date, method). One query for all bets.
+  const winnerMap = new Map<string, string>();
+  if (bets.length > 0) {
+    const cities = new Set<string>();
+    const dates = new Set<string>();
+    const methods = new Set<string>();
+    for (const b of bets) {
+      cities.add(b.row.city);
+      dates.add(b.row.local_date);
+      for (const m of b.methods) methods.add(m);
+    }
+    const winnerDocs = (await col
+      .find(
+        {
+          city: { $in: [...cities] },
+          local_date: { $in: [...dates] },
+          method: { $in: [...methods] as FeatureRow["method"][] },
+          won: true,
+        },
+        { projection: { city: 1, local_date: 1, method: 1, bracket: 1 } }
+      )
+      .toArray()) as unknown as Pick<FeatureRow, "city" | "local_date" | "method" | "bracket">[];
+    for (const doc of winnerDocs) {
+      winnerMap.set(`${doc.city}|${doc.local_date}|${doc.method}`, doc.bracket);
+    }
+  }
+
+  const drillRows: DrillRow[] = bets.map(({ row, price, edge, methods, dup_count }) => ({
+    city: row.city,
+    local_date: row.local_date,
+    bracket: row.bracket,
+    method: row.method,
+    first_tick_price_cents: row.first_tick_price_cents,
+    entry_price_cents: price,
+    entry_label: entryText,
+    won: row.won,
+    edge_cents: edge,
+    final_rank: row.final_rank,
+    resolved: row.resolved,
+    winning_bracket:
+      methods
+        .map((m) => winnerMap.get(`${row.city}|${row.local_date}|${m}`))
+        .find((w) => w != null) ?? null,
+    methods,
+    dup_count,
+  }));
+
+  drillRows.sort((a, b) => {
+    if (a.local_date !== b.local_date) return a.local_date < b.local_date ? 1 : -1;
+    return a.bracket.localeCompare(b.bracket);
+  });
+
+  const bucketLabel = dimensions
+    .map((spec, i) => {
+      const def = DIMENSION_REGISTRY_MAP.get(spec.id);
+      if (!def) throw new Error(`Unknown dimension: "${spec.id}"`);
+      return def.bucketLabel(targetParts[i], spec.config);
+    })
+    .join(" × ");
+  return { rows: drillRows, bucketLabel };
+}
+
+/**
+ * Today's (or one day's) bet_features rows for the live path, plus the OLDEST computed_at
+ * among them. The builder rewrites every row of the window on each run, so the oldest
+ * value is the time of the last full run. null = a row has no usable computed_at.
+ */
+export async function loadBetRowsForDay(
+  city: string,
+  localDate: string,
+  methods: string[]
+): Promise<{ rows: FeatureRow[]; oldestBuiltAtMs: number | null }> {
+  const db = await getDb();
+  const docs = (await db
+    .collection<BetFeatureDoc>("bet_features")
+    .find({ city, local_date: localDate, method: { $in: methods as FeatureRow["method"][] } })
+    .toArray()) as unknown as BetFeatureDoc[];
+  let oldest: number | null = null;
+  for (const d of docs) {
+    const ms = d.computed_at ? Date.parse(d.computed_at) : NaN;
+    if (!Number.isFinite(ms)) return { rows: docs.map(betDocToRow), oldestBuiltAtMs: null };
+    if (oldest === null || ms < oldest) oldest = ms;
+  }
+  return { rows: docs.map(betDocToRow), oldestBuiltAtMs: oldest };
+}
+
+/** Every bet ONE rule scores, as combo_search_fast.py scores it. For the parity test and the admin page. */
+export async function betsForRule(
+  dimensions: DimensionSpec[],
+  keys: string[],
+  opts: { maxDate?: string; requireResolved?: boolean } = {}
+): Promise<ScoredBet[]> {
+  const db = await getDb();
+  const query: Record<string, unknown> = {};
+  if (opts.maxDate) query.local_date = { $lte: opts.maxDate };
+  const docs = (await db
+    .collection<BetFeatureDoc>("bet_features")
+    .find(query)
+    .toArray()) as unknown as BetFeatureDoc[];
+  return scoreMatchedRows(rowsMatching(docs.map(betDocToRow), dimensions, keys), dimensions, {
+    requireResolved: opts.requireResolved !== false,
+  });
 }

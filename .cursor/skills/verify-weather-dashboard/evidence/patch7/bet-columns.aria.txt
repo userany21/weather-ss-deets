@@ -1,0 +1,169 @@
+url: http://127.0.0.1:4173/stats
+- banner:
+  - link "Weather Dashboard":
+    - /url: /
+  - link "Live now":
+    - /url: /live
+  - link "Stats Explorer":
+    - /url: /stats
+  - text: Wed, Nov 11, 2026
+- main:
+  - link "Regions":
+    - /url: /
+  - text: /Stats Explorer
+  - heading "Stats Explorer" [level=1]
+  - paragraph: Analyze historical and forecasted market data across regions, cities, and timeframes.
+  - text: Dimensions Lead Margin before Hour-N
+  - combobox "Change Lead Margin before Hour-N":
+    - option "Lead Margin before Hour-N" [selected]
+    - option "First-Tick Price"
+    - option "Leader before Hour-N"
+    - option "City"
+    - option "Method"
+    - option "Final Rank"
+    - option "First-Tick Hour"
+    - option "Day of Week"
+    - option "Region"
+    - option "Rank before Hour-N"
+    - option "Price at Hour-N"
+    - option "Rank Trend before Hour-N"
+    - option "Final Tick Count"
+    - option "Remove"
+  - text: 9AM
+  - combobox "Lead Margin before Hour-N setting":
+    - option "9AM" [selected]
+    - option "10AM"
+    - option "11AM"
+    - option "12PM"
+    - option "1PM"
+    - option "2PM"
+    - option "3PM"
+    - option "4PM"
+    - option "5PM"
+  - text: Add dimension
+  - combobox "Add dimension":
+    - option "Add dimension" [disabled] [selected]
+    - option "First-Tick Price"
+    - option "Leader before Hour-N"
+    - option "City"
+    - option "Method"
+    - option "Final Rank"
+    - option "First-Tick Hour"
+    - option "Day of Week"
+    - option "Region"
+    - option "Rank before Hour-N"
+    - option "Price at Hour-N"
+    - option "Rank Trend before Hour-N"
+    - option "Final Tick Count"
+  - text: Quick ranges
+  - button "+ First-Tick Price"
+  - button "+ Leader before Hour-N"
+  - button "City"
+  - button "+ Method"
+  - button "+ Final Rank"
+  - button "+ First-Tick Hour"
+  - button "+ Day of Week"
+  - button "Region"
+  - button "+ Rank before Hour-N"
+  - button "+ Price at Hour-N"
+  - button "+ Lead Margin before Hour-N" [disabled]
+  - button "+ Rank Trend before Hour-N"
+  - button "+ Final Tick Count"
+  - text: Filters Method
+  - combobox:
+    - option "All methods" [selected]
+    - option "Combined"
+    - option "Linear"
+    - option "Reciprocal"
+  - text: Date range
+  - textbox "From date"
+  - textbox "To date"
+  - text: Min sample / bucket
+  - spinbutton: "10"
+  - checkbox "Resolved markets only" [checked] [disabled]
+  - text: Resolved markets only
+  - checkbox "Count each bet once" [checked]
+  - text: Count each bet once Cities
+  - button "clear all"
+  - textbox "Search cities":
+    - /placeholder: Search cities...
+    - text: seattle
+  - button "Deselect all america cities": ✓
+  - button "america" [expanded]
+  - checkbox "seattle" [checked]
+  - text: seattle
+  - heading "Market price over the day" [level=2]
+  - text: 3 buckets · 620 rows · feature table 11/8/2026
+  - button "Avg Edge"
+  - button "Win Rate"
+  - img: Lead Margin before … Lead Margin before … Lead Margin before … -3¢ -2¢ -2¢ -2¢ -1¢
+  - heading "Market price details" [level=2]
+  - text: Edge = outcome minus the price at the 8AM closing tick. The bot buys at that tick. A city-day with more than 3 matching brackets is dropped.
+  - table:
+    - rowgroup:
+      - row "Bucket Count⇅ Resolved⇅ Avg Edge Win Rate⇅ t⇅ Edge - 2SE⇅":
+        - columnheader "Bucket"
+        - columnheader "Count⇅"
+        - columnheader "Resolved⇅"
+        - columnheader "Avg Edge"
+        - columnheader "Win Rate⇅"
+        - columnheader "t⇅"
+        - columnheader "Edge - 2SE⇅"
+    - rowgroup:
+      - 'row "Lead Margin before 9AM: Decisive (>40%) 46(92 raw) 46 -1.2¢ 39.1% -0.18 -14.5¢ Expand rows"':
+        - 'cell "Lead Margin before 9AM: Decisive (>40%)"'
+        - cell "46(92 raw)"
+        - cell "46"
+        - cell "-1.2¢"
+        - cell "39.1%"
+        - cell "-0.18"
+        - cell "-14.5¢"
+        - cell "Expand rows":
+          - button "Expand rows"
+      - 'row "Lead Margin before 9AM: Moderate (15–40%) 44(73 raw) 44 -2.1¢ 34.1% -0.31 -15.6¢ Expand rows"':
+        - 'cell "Lead Margin before 9AM: Moderate (15–40%)"'
+        - cell "44(73 raw)"
+        - cell "44"
+        - cell "-2.1¢"
+        - cell "34.1%"
+        - cell "-0.31"
+        - cell "-15.6¢"
+        - cell "Expand rows":
+          - button "Expand rows"
+      - 'row "Lead Margin before 9AM: Tight (<15%) 13 13 -2.6¢ 38.5% -0.20 -28.5¢ Expand rows"':
+        - 'cell "Lead Margin before 9AM: Tight (<15%)"'
+        - cell "13"
+        - cell "13"
+        - cell "-2.6¢"
+        - cell "38.5%"
+        - cell "-0.20"
+        - cell "-28.5¢"
+        - cell "Expand rows":
+          - button "Expand rows"
+  - heading "Local Times" [level=2]
+  - button "Americas" [expanded]
+  - list:
+    - listitem: san francisco 18:42
+    - listitem: seattle 18:42
+    - listitem: los angeles 18:42
+    - listitem: nyc 21:42
+    - listitem: atlanta 21:42
+    - listitem: miami 21:42
+  - button "Europe" [expanded]
+  - list:
+    - listitem: london 02:42
+    - listitem: munich 03:42
+    - listitem: milan 03:42
+    - listitem: amsterdam 03:42
+    - listitem: madrid 03:42
+    - listitem: paris 03:42
+  - button "Asia" [expanded]
+  - list:
+    - listitem: hong kong 10:42
+    - listitem: shenzhen 10:42
+    - listitem: beijing 10:42
+    - listitem: shanghai 10:42
+    - listitem: tokyo 11:42
+    - listitem: seoul 11:42
+    - listitem: singapore 10:42
+- alert

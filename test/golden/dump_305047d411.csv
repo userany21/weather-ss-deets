@@ -1,0 +1,220 @@
+city,local_date,bracket,method,decision_slot,entry_price_cents,won
+hong kong,2026-09-03,30°C,linear,6,36.00,1
+madrid,2026-09-03,38°C,linear,6,80.00,1
+beijing,2026-09-04,32°C,linear,6,39.00,0
+shenzhen,2026-09-04,29°C,linear,6,29.00,0
+milan,2026-09-04,32°C,linear,6,56.00,0
+seoul,2026-09-06,28°C,linear,6,11.00,0
+san francisco,2026-09-07,80-81°F,linear,6,49.00,1
+beijing,2026-09-08,24°C,linear,6,65.00,0
+paris,2026-09-08,27°C,linear,6,89.00,1
+nyc,2026-09-08,80-81°F,linear,6,38.00,1
+seoul,2026-09-09,26°C,linear,6,92.00,1
+hong kong,2026-09-09,32°C,linear,6,99.00,1
+paris,2026-09-09,22°C,linear,6,44.00,1
+milan,2026-09-09,24°C,linear,6,81.00,1
+atlanta,2026-09-09,88-89°F,linear,6,20.00,1
+miami,2026-09-09,90-91°F,linear,6,80.00,1
+hong kong,2026-09-10,31°C,linear,6,81.00,1
+munich,2026-09-10,18°C,linear,6,23.00,1
+milan,2026-09-10,23°C,linear,6,57.00,0
+madrid,2026-09-10,27°C,linear,6,51.00,0
+los angeles,2026-09-10,90-91°F,linear,6,98.00,1
+shenzhen,2026-09-11,32°C,linear,6,64.00,0
+amsterdam,2026-09-11,19°C,linear,6,23.00,0
+paris,2026-09-11,25°C,linear,6,58.00,1
+seattle,2026-09-11,66-67°F,linear,6,63.00,1
+beijing,2026-09-12,28°C,linear,6,22.00,1
+milan,2026-09-12,25°C,linear,6,31.00,0
+miami,2026-09-12,92-93°F,linear,6,99.00,1
+los angeles,2026-09-12,80-81°F,linear,6,94.00,1
+amsterdam,2026-09-13,21°C,linear,6,74.00,1
+paris,2026-09-13,25°C,linear,6,22.00,0
+seoul,2026-09-15,24°C,linear,6,27.00,1
+shenzhen,2026-09-15,29°C,linear,6,35.00,0
+san francisco,2026-09-15,72-73°F,linear,6,98.00,1
+los angeles,2026-09-15,80-81°F,linear,6,94.00,1
+hong kong,2026-09-16,31°C,linear,6,84.00,1
+beijing,2026-09-16,30°C,linear,6,30.00,0
+seattle,2026-09-16,72-73°F,linear,6,29.00,0
+seoul,2026-09-17,27°C,linear,6,94.00,1
+singapore,2026-09-17,33°C,linear,6,94.00,1
+beijing,2026-09-17,30°C,linear,6,30.00,0
+shenzhen,2026-09-17,30°C,linear,6,27.00,1
+singapore,2026-09-18,33°C,linear,6,93.00,1
+shenzhen,2026-09-18,31°C,linear,6,45.00,0
+madrid,2026-09-18,28°C,linear,6,74.00,1
+atlanta,2026-09-18,92-93°F,linear,6,25.00,1
+seoul,2026-09-19,28°C,linear,6,94.00,1
+beijing,2026-09-19,28°C,linear,6,61.00,1
+singapore,2026-09-19,34°C,linear,6,97.00,1
+san francisco,2026-09-19,66-67°F,linear,6,71.00,1
+seoul,2026-09-20,26°C,linear,6,75.00,1
+paris,2026-09-20,24°C,linear,6,12.00,1
+hong kong,2026-09-21,33°C,linear,6,99.00,1
+miami,2026-09-21,88-89°F,linear,6,61.00,1
+amsterdam,2026-09-22,19°C,linear,6,29.00,1
+paris,2026-09-22,24°C,linear,6,57.00,1
+london,2026-09-22,25°C,linear,6,67.00,1
+miami,2026-09-22,88-89°F,linear,6,61.00,1
+seoul,2026-09-23,27°C,linear,6,94.00,1
+beijing,2026-09-23,31°C,linear,6,61.00,1
+london,2026-09-23,23°C,linear,6,84.00,1
+seattle,2026-09-23,66-67°F,linear,6,59.00,1
+los angeles,2026-09-23,76-77°F,linear,6,91.00,1
+hong kong,2026-09-24,32°C,linear,6,99.00,1
+tokyo,2026-09-25,25°C,linear,6,26.00,0
+seoul,2026-09-25,24°C,linear,6,99.00,1
+madrid,2026-09-25,34°C,linear,6,5.00,0
+beijing,2026-09-26,27°C,linear,6,86.00,1
+shanghai,2026-09-26,31°C,linear,6,1.00,0
+nyc,2026-09-26,62-63°F,linear,6,78.00,1
+shanghai,2026-09-27,29°C,linear,6,98.00,1
+madrid,2026-09-27,31°C,linear,6,53.00,1
+nyc,2026-09-27,64-65°F,linear,6,87.00,1
+san francisco,2026-09-27,64-65°F,linear,6,95.00,1
+los angeles,2026-09-27,84-85°F,linear,6,99.00,1
+seoul,2026-09-28,23°C,linear,6,84.00,1
+beijing,2026-09-28,25°C,linear,6,63.00,1
+milan,2026-09-29,24°C,linear,6,24.00,1
+nyc,2026-09-29,70-71°F,linear,6,75.00,1
+atlanta,2026-09-29,82-83°F,linear,6,48.00,0
+seattle,2026-09-29,62-63°F,linear,6,72.00,1
+tokyo,2026-09-30,20°C,linear,6,81.00,1
+hong kong,2026-10-01,34°C,linear,6,10.00,0
+amsterdam,2026-10-01,21°C,linear,6,98.00,1
+london,2026-10-01,22°C,linear,6,7.00,1
+london,2026-10-02,22°C,linear,6,98.00,1
+nyc,2026-10-02,86-87°F,linear,6,90.00,1
+tokyo,2026-10-03,22°C,linear,6,95.00,1
+singapore,2026-10-03,32°C,linear,6,52.00,1
+munich,2026-10-03,20°C,linear,6,42.00,1
+nyc,2026-10-03,70-71°F,linear,6,81.00,1
+miami,2026-10-03,86-87°F,linear,6,55.00,1
+beijing,2026-10-04,21°C,linear,6,93.00,1
+shanghai,2026-10-04,23°C,linear,6,99.00,1
+nyc,2026-10-04,62-63°F,linear,6,98.00,1
+miami,2026-10-04,90-91°F,linear,6,14.00,0
+beijing,2026-10-05,24°C,linear,6,83.00,0
+milan,2026-10-05,24°C,linear,6,32.00,0
+munich,2026-10-05,22°C,linear,6,9.00,1
+san francisco,2026-10-05,75°F or below,linear,6,64.00,1
+munich,2026-10-06,22°C,linear,6,59.00,1
+miami,2026-10-06,88-89°F,linear,6,86.00,1
+san francisco,2026-10-06,80-81°F,linear,6,11.00,1
+seattle,2026-10-06,64-65°F,linear,6,52.00,0
+seoul,2026-10-07,22°C,linear,6,95.00,1
+tokyo,2026-10-08,23°C,linear,6,75.00,1
+seoul,2026-10-08,22°C,linear,6,85.00,1
+hong kong,2026-10-08,29°C,linear,6,98.00,1
+milan,2026-10-08,20°C,linear,6,66.00,1
+london,2026-10-08,14°C,linear,6,19.00,0
+nyc,2026-10-08,74-75°F,linear,6,67.00,0
+seoul,2026-10-09,23°C,linear,6,97.00,1
+london,2026-10-09,21°C,linear,6,5.00,0
+san francisco,2026-10-09,70-71°F,linear,6,96.00,1
+beijing,2026-10-10,27°C,linear,6,77.00,1
+milan,2026-10-10,21°C,linear,6,46.00,1
+madrid,2026-10-10,24°C,linear,6,37.00,0
+london,2026-10-10,16°C,linear,6,84.00,1
+hong kong,2026-10-11,31°C,linear,6,99.00,1
+singapore,2026-10-13,33°C,linear,6,99.00,1
+amsterdam,2026-10-13,20°C,linear,6,94.00,1
+seattle,2026-10-13,60-61°F,linear,6,22.00,1
+munich,2026-10-15,17°C,linear,6,22.00,0
+madrid,2026-10-15,27°C,linear,6,72.00,0
+atlanta,2026-10-15,86-87°F,linear,6,60.00,1
+tokyo,2026-10-16,23°C,linear,6,32.00,0
+seoul,2026-10-16,23°C,linear,6,95.00,1
+munich,2026-10-16,20°C,linear,6,65.00,1
+hong kong,2026-10-16,30°C,linear,6,20.00,0
+shenzhen,2026-10-16,30°C,linear,6,76.00,1
+madrid,2026-10-16,27°C,linear,6,68.00,1
+seattle,2026-10-16,76-77°F,linear,6,21.00,0
+shenzhen,2026-10-17,31°C,linear,6,82.00,1
+amsterdam,2026-10-17,14°C,linear,6,87.00,1
+shenzhen,2026-10-18,32°C,linear,6,96.00,1
+milan,2026-10-18,16°C,linear,6,80.00,1
+atlanta,2026-10-18,66-67°F,linear,6,67.00,1
+beijing,2026-10-19,20°C,linear,6,83.00,1
+amsterdam,2026-10-19,14°C,linear,6,68.00,0
+paris,2026-10-19,14°C,linear,6,34.00,0
+london,2026-10-19,14°C,linear,6,95.00,1
+seattle,2026-10-19,60-61°F,linear,6,30.00,0
+los angeles,2026-10-19,78-79°F,linear,6,99.00,1
+milan,2026-10-21,18°C,linear,6,67.00,1
+seattle,2026-10-21,64-65°F,linear,6,61.00,1
+beijing,2026-10-22,17°C,linear,6,49.00,1
+amsterdam,2026-10-22,12°C,linear,6,13.00,0
+miami,2026-10-22,80-81°F,linear,6,93.00,1
+shenzhen,2026-10-23,31°C,linear,6,67.00,0
+shanghai,2026-10-24,23°C,linear,6,7.00,0
+milan,2026-10-24,18°C,linear,6,90.00,1
+madrid,2026-10-24,19°C,linear,6,60.00,1
+miami,2026-10-24,84-85°F,linear,6,11.00,0
+tokyo,2026-10-25,26°C,linear,6,98.00,1
+paris,2026-10-25,17°C,linear,6,11.00,0
+san francisco,2026-10-25,66-67°F,linear,6,5.00,0
+los angeles,2026-10-25,76-77°F,linear,6,99.00,1
+singapore,2026-10-26,31°C,linear,6,46.00,1
+shenzhen,2026-10-26,30°C,linear,6,79.00,1
+munich,2026-10-26,12°C,linear,6,99.00,1
+madrid,2026-10-26,24°C,linear,6,56.00,1
+nyc,2026-10-26,72-73°F,linear,6,52.00,0
+atlanta,2026-10-26,70-71°F,linear,6,77.00,1
+san francisco,2026-10-26,68-69°F,linear,6,24.00,1
+seattle,2026-10-26,58-59°F,linear,6,21.00,1
+singapore,2026-10-27,33°C,linear,6,23.00,0
+munich,2026-10-27,16°C,linear,6,88.00,1
+milan,2026-10-27,17°C,linear,6,93.00,1
+amsterdam,2026-10-27,17°C,linear,6,1.00,0
+paris,2026-10-27,16°C,linear,6,54.00,1
+seoul,2026-10-28,13°C,linear,6,12.00,0
+shenzhen,2026-10-28,29°C,linear,6,92.00,1
+madrid,2026-10-28,22°C,linear,6,27.00,0
+paris,2026-10-28,16°C,linear,6,87.00,1
+nyc,2026-10-28,58-59°F,linear,6,18.00,0
+miami,2026-10-28,86-87°F,linear,6,94.00,1
+singapore,2026-10-29,30°C,linear,6,8.00,0
+madrid,2026-10-29,22°C,linear,6,50.00,1
+paris,2026-10-29,16°C,linear,6,97.00,1
+nyc,2026-10-29,66-67°F,linear,6,32.00,0
+singapore,2026-10-30,32°C,linear,6,97.00,1
+madrid,2026-10-30,23°C,linear,6,71.00,0
+shanghai,2026-10-30,24°C,linear,6,96.00,1
+shenzhen,2026-10-31,30°C,linear,6,95.00,1
+munich,2026-10-31,9°C,linear,6,94.00,1
+madrid,2026-10-31,21°C,linear,6,33.00,0
+seattle,2026-10-31,54-55°F,linear,6,88.00,1
+los angeles,2026-10-31,70-71°F,linear,6,98.00,1
+shanghai,2026-11-01,26°C,linear,6,97.00,1
+shenzhen,2026-11-01,30°C,linear,6,83.00,1
+munich,2026-11-01,8°C,linear,6,96.00,1
+paris,2026-11-01,13°C,linear,6,51.00,1
+san francisco,2026-11-01,64-65°F,linear,6,81.00,1
+beijing,2026-11-02,18°C,linear,6,92.00,1
+amsterdam,2026-11-02,14°C,linear,6,99.00,1
+seattle,2026-11-02,50-51°F,linear,6,94.00,1
+tokyo,2026-11-03,19°C,linear,6,81.00,1
+paris,2026-11-03,10°C,linear,6,53.00,1
+london,2026-11-03,13°C,linear,6,2.00,0
+atlanta,2026-11-03,70-71°F,linear,6,72.00,1
+madrid,2026-11-03,14°C,linear,6,9.00,1
+miami,2026-11-03,86-87°F,linear,6,99.00,1
+milan,2026-11-04,11°C,linear,6,98.00,1
+madrid,2026-11-04,15°C,linear,6,53.00,1
+miami,2026-11-04,82-83°F,linear,6,82.00,1
+munich,2026-11-05,10°C,linear,6,97.00,1
+madrid,2026-11-05,16°C,linear,6,74.00,1
+paris,2026-11-05,11°C,linear,6,53.00,1
+atlanta,2026-11-05,80-81°F,linear,6,99.00,1
+seattle,2026-11-05,56-57°F,linear,6,99.00,1
+madrid,2026-11-06,17°C,linear,6,79.00,1
+paris,2026-11-06,13°C,linear,6,89.00,1
+singapore,2026-11-07,33°C,linear,6,3.00,0
+shenzhen,2026-11-07,30°C,linear,6,97.00,1
+munich,2026-11-07,7°C,linear,6,83.00,1
+paris,2026-11-07,10°C,linear,6,45.00,1
+tokyo,2026-11-08,17°C,linear,6,90.00,0
+shenzhen,2026-11-08,30°C,linear,6,99.00,1
+seattle,2026-11-08,58-59°F,linear,6,6.00,0

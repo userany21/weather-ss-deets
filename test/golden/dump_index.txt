@@ -1,0 +1,7 @@
+c6ce8fe7e9	first_tick_hour=8AM | lead_margin:7=moderate	max_date=2026-11-09	n=293 city_days=283 win=0.7509 avg_price=65.63 avg_edge=9.46 t=5.10
+c6ce8fe7e9	first_tick_hour=8AM | lead_margin:7=moderate	max_date=2026-11-09	n=293 city_days=283 win=0.7509 avg_price=65.63 avg_edge=9.46 t=5.10
+c6ce8fe7e9	first_tick_hour=8AM | lead_margin:7=moderate	max_date=2026-11-09	n=293 city_days=283 win=0.7509 avg_price=65.63 avg_edge=9.46 t=5.10
+305047d411	method=linear | rank_at_hour:7=2 | leader:2=No	max_date=2026-11-09	n=219 city_days=219 win=0.7397 avg_price=63.57 avg_edge=10.40 t=4.42
+48a9f56a0e	price:50=50-99c | leader:2=No | lead_margin:6=decisive	max_date=2026-11-09	n=117 city_days=117 win=0.8974 avg_price=75.75 avg_edge=13.99 t=4.95
+be5ffc2292	method=combined | price:50=50-99c | lead_margin:3=moderate	max_date=2026-11-09	n=101 city_days=101 win=0.7723 avg_price=60.06 avg_edge=17.17 t=4.03
+cb773fd820	method=reciprocal | price:50=0-49c | price_at_hour:6=40-59c	max_date=2026-11-09	n=111 city_days=111 win=0.7117 avg_price=55.16 avg_edge=16.01 t=3.89

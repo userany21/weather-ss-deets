@@ -8,7 +8,7 @@ import {
   pnlFor,
   type RuleClass,
 } from "./engine";
-import { evaluateRule, type BridgeMatch } from "./liveBridge";
+import { BridgeSkip, evaluateRule, type BridgeMatch } from "./liveBridge";
 import { loadTodayTicks, loadWinningBracket, type TickDoc, type TickMethod } from "./mongo";
 import { sendBuy, type BuyIntent, type BuyReply } from "./polybot";
 import {
@@ -181,6 +181,12 @@ async function processRule(
     try {
       matches = await evaluateRule({ by: rule.by_param, criteriaKey: rule.criteria_key, method: rule.method, city, localDate });
     } catch (e) {
+      if (e instanceof BridgeSkip) {
+        // A planned skip, not an error. final = never trade this rule today. Else try again next pass.
+        if (e.final) st.attempted.set(evalKey, now.getTime());
+        bump(summary, e.reason);
+        continue;
+      }
       summary.errors.push(`evaluate ${rule.id}/${city}: ${errMsg(e)}`);
       continue; // not marked attempted: retried next pass while the window is open
     }
@@ -217,6 +223,15 @@ async function processRule(
       }
       if (exists) {
         bump(summary, "already_filled");
+        continue;
+      }
+
+      // Dry run: log what the worker would buy. Send nothing. Store nothing.
+      if (process.env.AUTOMATION_DRY_RUN === "true") {
+        console.log(
+          `[automation][dry-run] would buy ${city} ${localDate} ${buy.bracket} rule ${rule.id} signal ${buy.signalPriceCents}c`,
+        );
+        bump(summary, "dry_run");
         continue;
       }
 

@@ -42,6 +42,11 @@ interface Bucket {
   resolved: number;
   win_rate: number | null;
   avg_edge_cents: number | null;
+  /** Set by the bet_features source only. */
+  city_days?: number;
+  se_cents?: number | null;
+  t?: number | null;
+  edge_lower_cents?: number | null;
 }
 interface StatsResponse {
   dimensions: string[];
@@ -49,6 +54,7 @@ interface StatsResponse {
   buckets: Bucket[];
   total_rows: number;
   dimension_registry: DimMeta[];
+  source?: "stats_features" | "bet_features";
   computed_at: string | null;
   error?: string;
 }
@@ -91,7 +97,7 @@ interface ActiveDim {
 }
 
 type Metric = "edge" | "winrate";
-type SortCol = "avg_edge_cents" | "win_rate" | "count" | "resolved";
+type SortCol = "avg_edge_cents" | "win_rate" | "count" | "resolved" | "t" | "edge_lower_cents";
 type SortDir = "desc" | "asc";
 
 // ---------------------------------------------------------------------------
@@ -132,6 +138,8 @@ interface ScanResponse {
   cities_scanned: string[];
   match_count: number;
   matches: ScanMatch[];
+  builder_stale?: boolean;
+  builder_oldest_computed_at?: string | null;
   error?: string;
 }
 
@@ -597,7 +605,7 @@ export default function StatsExplorerPage() {
   );
   const [dateFrom, setDateFrom]       = useState("");
   const [dateTo, setDateTo]           = useState("");
-  const [method, setMethod]           = useState("combined");
+  const [method, setMethod]           = useState("all");
   const [minCount, setMinCount]       = useState(10);
   const [resolvedOnly, setResolvedOnly] = useState(true);
   const [dedupe, setDedupe] = useState(true);
@@ -680,6 +688,28 @@ export default function StatsExplorerPage() {
     return hour >= 0
       ? `Hour filters use data from before the ${HOURS[hour] ?? `H${hour}`} hour. Edge = outcome − that bracket's first tick price during the ${HOURS[hour] ?? `H${hour}`} hour (only brackets that tick in that hour are included).`
       : "Edge = outcome − the first-tick price";
+  }, [activeDims, registry]);
+
+  // bet_features source: the page, the script and the bot use one entry rule.
+  const betSource = data?.source === "bet_features";
+  const betEntryNote = useMemo(() => {
+    // Same ids as ASOF_DIMENSION_IDS in lib/stats-aggregator.ts: they read the hour before their label.
+    const asOf = new Set(["leader", "rank_at_hour", "lead_margin", "rank_trend"]);
+    let slot = -1;
+    for (const d of activeDims) {
+      const meta = registry.find((r) => r.id === d.id);
+      if (meta?.timing === "end_of_day") {
+        return "Edge hidden: a filter uses end-of-day data (Final Rank / Final Tick Count), so there is no valid entry time.";
+      }
+      if (meta?.timing === "hour") {
+        const key = meta.configSchema?.key ?? "n";
+        const n = d.config[key] ?? meta.configSchema?.default ?? 0;
+        slot = Math.max(slot, asOf.has(d.id) ? n - 1 : n);
+      }
+    }
+    return slot >= 0
+      ? `Edge = outcome minus the price at the ${HOURS[slot] ?? `H${slot}`} closing tick. The bot buys at that tick. A city-day with more than 3 matching brackets is dropped.`
+      : "Edge = outcome minus the first-tick price. The bot does not trade a rule with no hour filter.";
   }, [activeDims, registry]);
 
   // ---- Dimension picker handlers ----
@@ -1081,7 +1111,8 @@ export default function StatsExplorerPage() {
             <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-[#c5d0e6]">
               <input
                 type="checkbox"
-                checked={resolvedOnly}
+                checked={resolvedOnly || betSource}
+                disabled={betSource}
                 onChange={(e) => setResolvedOnly(e.target.checked)}
                 className="h-4 w-4 rounded accent-[#22c98a]"
               />
@@ -1342,7 +1373,7 @@ export default function StatsExplorerPage() {
               <div className="mb-2 flex items-center gap-3">
                 <ChartBoxIcon className="h-5 w-5 shrink-0 text-[#38a3f5]" />
                 <h2 className="text-[15px] font-semibold text-white">Market price details</h2>
-                <span className="ml-auto text-[11px] text-[#5f6c86]">{entryNote}</span>
+                <span className="ml-auto text-[11px] text-[#5f6c86]">{betSource ? betEntryNote : entryNote}</span>
               </div>
 
               <table className="w-full border-collapse text-sm">
@@ -1378,6 +1409,26 @@ export default function StatsExplorerPage() {
                       Win Rate
                       <SortArrow col="win_rate" sortCol={sortCol} sortDir={sortDir} />
                     </th>
+                    {betSource && (
+                      <>
+                        <th
+                          className="cursor-pointer whitespace-nowrap px-3 py-2 text-right font-normal hover:text-white"
+                          onClick={() => handleSort("t")}
+                          title="Average edge divided by its standard error. The error is clustered by city-day."
+                        >
+                          t
+                          <SortArrow col="t" sortCol={sortCol} sortDir={sortDir} />
+                        </th>
+                        <th
+                          className="cursor-pointer whitespace-nowrap px-3 py-2 text-right font-normal hover:text-white"
+                          onClick={() => handleSort("edge_lower_cents")}
+                          title="Average edge minus 2 standard errors"
+                        >
+                          Edge - 2SE
+                          <SortArrow col="edge_lower_cents" sortCol={sortCol} sortDir={sortDir} />
+                        </th>
+                      </>
+                    )}
                     <th className="w-8" aria-hidden="true" />
                   </tr>
                 </thead>
@@ -1450,6 +1501,27 @@ export default function StatsExplorerPage() {
                           <td className="px-3 py-2.5 text-right tabular-nums text-[#38b6ff]">
                             {fmtPct(b.win_rate)}
                           </td>
+                          {betSource && (
+                            <>
+                              <td
+                                className="px-3 py-2.5 text-right tabular-nums text-[#c5d0e6]"
+                                title={b.city_days != null ? `${b.city_days} city-days` : undefined}
+                              >
+                                {b.t != null ? b.t.toFixed(2) : "—"}
+                              </td>
+                              <td
+                                className="px-3 py-2.5 text-right tabular-nums"
+                                style={{
+                                  color:
+                                    b.edge_lower_cents != null && b.edge_lower_cents > 0
+                                      ? C.good
+                                      : C.axis,
+                                }}
+                              >
+                                {fmtEdge(b.edge_lower_cents ?? null)}
+                              </td>
+                            </>
+                          )}
                           <td className="px-2 py-2.5 text-right">
                             {isPinned ? (
                               <span
@@ -1485,7 +1557,7 @@ export default function StatsExplorerPage() {
                         {/* Drill-down sub-table — the raw rows behind this bucket */}
                         {isExpanded && (
                           <tr key={`${b.key}-drill`} className="border-t border-[#121d31]">
-                            <td colSpan={6} className="px-3 pb-4 pt-1">
+                            <td colSpan={betSource ? 8 : 6} className="px-3 pb-4 pt-1">
                               {drillLoading ? (
                                 <div className="py-3 text-xs text-[#8a97b1]">Loading rows…</div>
                               ) : drillData?.error ? (
@@ -1612,6 +1684,11 @@ export default function StatsExplorerPage() {
                         <span className="text-xs text-[#8a97b1]">
                           · {new Date(result.scanned_at).toLocaleTimeString()}
                         </span>
+                        {result.builder_stale && (
+                          <span className="text-xs font-semibold text-[#ff5566]">
+                            · feature table is old: the bot buys nothing now
+                          </span>
+                        )}
                       </div>
 
                       {result.matches.length === 0 ? (
