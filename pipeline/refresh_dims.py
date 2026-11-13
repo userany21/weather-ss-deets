@@ -147,10 +147,10 @@ def stage_table(conn, db, schema, n, path):
     stage = f"{db}.{schema}.DIM{n}_STG"
     before = cur.execute(f"SELECT COUNT(*) FROM {target}").fetchone()[0]
     cur.execute(f"CREATE OR REPLACE TRANSIENT TABLE {stage} LIKE {target}")
-    cur.execute(f"PUT 'file://{path.as_posix()}' @~/dims_refresh AUTO_COMPRESS=TRUE OVERWRITE=TRUE")
+    cur.execute(f"PUT 'file://{path.as_posix()}' @~/dims_refresh/ AUTO_COMPRESS=TRUE OVERWRITE=TRUE")
     cur.execute(f"""
         COPY INTO {stage}
-        FROM @~/dims_refresh
+        FROM @~/dims_refresh/
         FILES = ('{path.name}.gz')
         FILE_FORMAT = (TYPE = CSV SKIP_HEADER = 1 FIELD_OPTIONALLY_ENCLOSED_BY = '"'
                        NULL_IF = ('', 'nan', 'NaN', 'inf', '-inf') EMPTY_FIELD_AS_NULL = TRUE)
